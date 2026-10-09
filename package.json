@@ -1,0 +1,44 @@
+{
+  "name": "cuelight-cable",
+  "version": "0.1.0",
+  "description": "Cuelight Cable: a cable-TV channel guide that plays Cuelight media and playlists.",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.14.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "vite",
+    "start": "node --disable-warning=ExperimentalWarning src/server/main.ts",
+    "cable": "node --disable-warning=ExperimentalWarning src/server/cli.ts",
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.web.json && tsc -p tsconfig.server.json",
+    "test": "vitest run",
+    "generate:cuelight-api": "openapi-typescript vendor/cuelight-openapi.yaml -o src/cuelight-api.d.ts",
+    "sync:cuelight-api": "node scripts/sync-cuelight-api.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.0",
+    "@tanstack/react-router": "^1.170.0",
+    "hono": "^4.13.0",
+    "openapi-fetch": "^0.17.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "undici": "^7.16.0",
+    "zod": "^4.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.0",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.0",
+    "openapi-typescript": "^7.13.0",
+    "playwright": "^1.64.0",
+    "typescript": "~5.9.3",
+    "vite": "^8.0.0",
+    "vitest": "^5.0.0"
+  }
+}

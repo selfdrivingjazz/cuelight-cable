@@ -1,0 +1,2534 @@
+openapi: 3.1.1
+info:
+  title: Cable API
+  version: 0.0.1
+  description: Public operator and player HTTP contract for Cable.
+servers:
+  - url: https://localhost:8443/api/v1
+tags:
+  - name: system
+  - name: operator
+  - name: player
+  - name: profiles
+    description: Saved sets of per-screen assignments that are activated at once.
+  - name: browser-node
+    description: >-
+      Browser nodes pair with a claim code and authenticate with a bearer credential
+      (browserNodeToken) instead of mTLS. Every /player/* operation (except enroll,
+      recover, credential rotation, and screenshots) is also served at
+      /browser-node/player/* with browserNodeToken; artifact content additionally
+      accepts the token as the access_token query parameter for media elements.
+  - name: playlists
+    description: Ordered lists of file and web media with per-item durations, assignable to nodes as media-schedule releases.
+  - name: app
+    description: >-
+      Web media with appAccess enabled ("Cuelight app") are presented with an app token so the
+      page can read the media library and playlists and consume the screen's remote input.
+      When a node presents a web release whose presentation carries appAccess true, it mints a
+      token for web.mediaId (POST /player/app-tokens, or /browser-node/player/app-tokens for
+      browser nodes) and opens the page URL with fragment parameters
+      `cuelight-token=<token>&cuelight-api=<apiUrl>`, both values encoded with
+      encodeURIComponent. Any existing fragment is kept: existing cuelight-token and
+      cuelight-api parameters are dropped from it and ours are appended joined with `&`
+      (https://app.example/x#view=grid becomes
+      https://app.example/x#view=grid&cuelight-token=T&cuelight-api=https%3A%2F%2Fcontrol.example%2Fapi%2Fv1;
+      a URL without a fragment gets #cuelight-token=T&cuelight-api=...). If minting fails the
+      node fails the presentation instead of showing the page without a token. Tokens last 24h,
+      are valid only while the node's current assignment targets that media item, and stop
+      working when the node is reassigned, revoked, or unregistered; POST /app/token:renew
+      returns a successor. Pages authenticate /app/* with `Authorization: Bearer <token>`
+      (media content and thumbnails also accept the access_token query parameter). /app/*
+      responses carry `Access-Control-Allow-Origin: *`, allow OPTIONS preflight, use no
+      cookies, and are read-only except token renewal. Nodes do not inject native remote input
+      into app pages and do not show their own remote QR overlay for them; the page polls
+      /app/remote/events and renders the phone-remote QR itself from the remote field.
+paths:
+  /health:
+    get:
+      tags: [system]
+      operationId: getHealth
+      security: []
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /openapi.yaml:
+    get:
+      tags: [system]
+      operationId: getOpenApiSpec
+      description: "This OpenAPI document. Served with Access-Control-Allow-Origin: *."
+      security: []
+      responses:
+        "200":
+          description: The embedded API contract.
+          content:
+            application/yaml:
+              schema: {type: string}
+  /operator/me:
+    get:
+      tags: [operator]
+      operationId: getOperatorMe
+      security: [{operatorToken: []}]
+      x-required-scopes: []
+      responses:
+        "200":
+          description: Authenticated operator identity, scopes, and capabilities.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperatorMe"}
+        default: {$ref: "#/components/responses/Problem"}
+  /enrollment-tokens:
+    post:
+      tags: [operator]
+      operationId: createEnrollmentToken
+      security: [{operatorToken: []}]
+      x-required-scopes: [node_enroll]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "201":
+          description: One-time enrollment secret. The secret is never retrievable again.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrollmentTokenCreated"
+        default:
+          $ref: "#/components/responses/Problem"
+  /admin-tokens:
+    get:
+      tags: [operator]
+      operationId: listAdminTokens
+      security: [{operatorToken: []}]
+      x-required-scopes: [security_admin]
+      responses:
+        "200":
+          description: Token metadata; never token secrets.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/AdminToken"}
+  /admin-tokens/{tokenId}/revoke:
+    post:
+      tags: [operator]
+      operationId: revokeAdminToken
+      security: [{operatorToken: []}]
+      x-required-scopes: [security_admin]
+      parameters:
+        - $ref: "#/components/parameters/TokenId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "204": {description: Token revoked or already revoked.}
+        default: {$ref: "#/components/responses/Problem"}
+  /nodes:
+    get:
+      tags: [operator]
+      operationId: listNodes
+      security: [{operatorToken: []}]
+      x-required-scopes: [node_read]
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/PageSort"
+        - $ref: "#/components/parameters/PageOrder"
+        - $ref: "#/components/parameters/PageSearch"
+      responses:
+        "200":
+          description: Nodes in deterministic keyset order.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/NodePage"}
+  /nodes/{nodeId}:
+    get:
+      tags: [operator]
+      operationId: getNode
+      security: [{operatorToken: []}]
+      x-required-scopes: [node_read]
+      parameters: [{$ref: "#/components/parameters/NodeId"}]
+      responses:
+        "200":
+          description: Node.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Node"}
+        default: {$ref: "#/components/responses/Problem"}
+    patch:
+      tags: [operator]
+      operationId: updateNode
+      security: [{operatorToken: []}]
+      x-required-scopes: [node_write]
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: {type: string, minLength: 1, maxLength: 120}
+      responses:
+        "200":
+          description: Updated node.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Node"}
+        default: {$ref: "#/components/responses/Problem"}
+    delete:
+      tags: [operator]
+      operationId: unregisterNode
+      security: [{operatorToken: []}]
+      x-required-scopes: [security_admin]
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "204": {description: Node credentials revoked and node removed from the active Fleet view.}
+        default: {$ref: "#/components/responses/Problem"}
+  /nodes/{nodeId}/status:
+    get:
+      tags: [operator]
+      operationId: getNodeStatus
+      security: [{operatorToken: []}]
+      x-required-scopes: [node_read]
+      parameters: [{$ref: "#/components/parameters/NodeId"}]
+      responses:
+        "200":
+          description: Latest observed node status.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/NodeReport"}
+        default: {$ref: "#/components/responses/Problem"}
+  /nodes/{nodeId}/capabilities:
+    get:
+      tags: [operator]
+      operationId: getNodeCapabilities
+      security: [{operatorToken: []}]
+      x-required-scopes: [node_read]
+      parameters: [{$ref: "#/components/parameters/NodeId"}]
+      responses:
+        "200":
+          description: Latest player capability report.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CapabilityReport"}
+        default: {$ref: "#/components/responses/Problem"}
+  /nodes/{nodeId}/recovery-tokens:
+    post:
+      tags: [operator]
+      operationId: createNodeRecoveryToken
+      security: [{operatorToken: []}]
+      x-required-scopes: [security_admin]
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "201":
+          description: One-time recovery secret bound to the existing node ID.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EnrollmentTokenCreated"}
+        default: {$ref: "#/components/responses/Problem"}
+  /nodes/{nodeId}/remote-link:
+    post:
+      tags: [operator]
+      operationId: createNodeRemoteLink
+      summary: Mint a phone link for the node's active remote-input session.
+      security: [{operatorToken: []}]
+      x-required-scopes: [assignment_write]
+      parameters: [{$ref: "#/components/parameters/NodeId"}]
+      responses:
+        "201":
+          description: Phone link bound to the active session; valid until the session expires.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RemoteLink"}
+        "404":
+          description: The node has no active remote-input session.
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "409":
+          description: Remote input is disabled for the node's assignment.
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /nodes/{nodeId}/assignment:
+    get:
+      tags: [operator]
+      operationId: getNodeAssignment
+      security: [{operatorToken: []}]
+      x-required-scopes: [assignment_read]
+      parameters: [{$ref: "#/components/parameters/NodeId"}]
+      responses:
+        "200":
+          description: Desired assignment.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Assignment"}
+        default: {$ref: "#/components/responses/Problem"}
+    put:
+      tags: [operator]
+      operationId: putNodeAssignment
+      security: [{operatorToken: []}]
+      x-required-scopes: [assignment_write]
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AssignmentInput"}
+      responses:
+        "200":
+          description: Existing idempotent assignment response.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Assignment"}
+        "201":
+          description: New assignment generation.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Assignment"}
+        default: {$ref: "#/components/responses/Problem"}
+  /nodes/{nodeId}/events:
+    get:
+      tags: [operator]
+      operationId: listNodeEvents
+      security: [{operatorToken: []}]
+      x-required-scopes: [node_read]
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+        - name: cursor
+          in: query
+          description: Last consumed event sequence; this is not a keyset cursor.
+          schema: {type: string, pattern: "^[0-9]+$"}
+        - $ref: "#/components/parameters/PageLimit"
+      responses:
+        "200":
+          description: Node events. nextCursor is the last returned sequence.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EventPage"}
+  /uploads:
+    get:
+      tags: [operator]
+      operationId: listUploads
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_read]
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/PageSort"
+        - $ref: "#/components/parameters/PageOrder"
+        - $ref: "#/components/parameters/PageSearch"
+      responses:
+        "200":
+          description: Uploads in deterministic keyset order.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UploadPage"}
+    post:
+      tags: [operator]
+      operationId: createUpload
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_write]
+      parameters: [{$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/UploadCreate"}
+      responses:
+        "201":
+          description: Upload created.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Upload"}
+        default: {$ref: "#/components/responses/Problem"}
+  /uploads/{uploadId}:
+    head:
+      tags: [operator]
+      operationId: headUpload
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_write]
+      parameters: [{$ref: "#/components/parameters/UploadId"}]
+      responses:
+        "204":
+          description: Current offset and declared length.
+          headers:
+            Upload-Offset: {schema: {type: integer, format: int64, minimum: 0}}
+            Upload-Length: {schema: {type: integer, format: int64, minimum: 1}}
+        default: {$ref: "#/components/responses/Problem"}
+    patch:
+      tags: [operator]
+      operationId: appendUpload
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_write]
+      parameters:
+        - $ref: "#/components/parameters/UploadId"
+        - name: Upload-Offset
+          in: header
+          required: true
+          schema: {type: integer, format: int64, minimum: 0}
+      requestBody:
+        required: true
+        content:
+          application/offset+octet-stream:
+            schema: {type: string, format: binary}
+      responses:
+        "204":
+          description: Chunk accepted.
+          headers:
+            Upload-Offset: {schema: {type: integer, format: int64, minimum: 0}}
+        default: {$ref: "#/components/responses/Problem"}
+  /uploads/{uploadId}/complete:
+    post:
+      tags: [operator]
+      operationId: completeUpload
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_write]
+      parameters:
+        - $ref: "#/components/parameters/UploadId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "201":
+          description: Asset and immutable artifact created.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Asset"}
+        default: {$ref: "#/components/responses/Problem"}
+  /assets/register-local:
+    post:
+      tags: [operator]
+      operationId: registerLocalAsset
+      security: [{operatorToken: []}]
+      x-required-scopes: [local_media_read]
+      parameters: [{$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties: {path: {type: string, minLength: 1}}
+      responses:
+        "201":
+          description: Asset copied into Cable storage.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Asset"}
+        default: {$ref: "#/components/responses/Problem"}
+  /assets:
+    get:
+      tags: [operator]
+      operationId: listAssets
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_read]
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/PageSort"
+        - $ref: "#/components/parameters/PageOrder"
+        - $ref: "#/components/parameters/PageSearch"
+      responses:
+        "200":
+          description: Assets in deterministic keyset order.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AssetPage"}
+  /assets/{assetId}:
+    get:
+      tags: [operator]
+      operationId: getAsset
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_read]
+      parameters: [{$ref: "#/components/parameters/AssetId"}]
+      responses:
+        "200":
+          description: Asset.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Asset"}
+        default: {$ref: "#/components/responses/Problem"}
+  /media:
+    get:
+      tags: [operator]
+      operationId: listMedia
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_read]
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/PageSearch"
+        - name: sort
+          in: query
+          description: Sort key. Defaults to createdAt.
+          schema: {type: string, enum: [createdAt, title, size, type], default: createdAt}
+        - $ref: "#/components/parameters/PageOrder"
+        - name: playable
+          in: query
+          schema: {type: boolean, default: true}
+        - name: assetId
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 100
+            items: {$ref: "#/components/schemas/Id"}
+        - name: kind
+          in: query
+          description: File media (uploaded assets) or web media (pages).
+          schema: {type: string, enum: [file, web]}
+        - name: mediaType
+          in: query
+          description: Narrows to file media whose artifact is an image, video, or audio type.
+          schema: {type: string, enum: [image, video, audio]}
+      responses:
+        "200":
+          description: Library media. With playable=true, web media are always included.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MediaPage"}
+        default: {$ref: "#/components/responses/Problem"}
+    post:
+      tags: [operator]
+      operationId: createMedia
+      description: "Creates file media from an asset, or web media from a URL (kind web). Web media start a background viewport capture; adding a URL that is already in the library returns that item with 200. The Idempotency-Key header is required for file media."
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_write]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          schema: {type: string, minLength: 16, maxLength: 200}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MediaInput"}
+      responses:
+        "200":
+          description: The web URL was already in the library.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Media"}
+        "201":
+          description: Media created.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Media"}
+        default: {$ref: "#/components/responses/Problem"}
+  /media/{mediaId}:
+    parameters:
+      - name: mediaId
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/Id"}
+    get:
+      tags: [operator]
+      operationId: getMedia
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_read]
+      responses:
+        "200":
+          description: Authored media.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Media"}
+        default: {$ref: "#/components/responses/Problem"}
+    patch:
+      tags: [operator]
+      operationId: updateMedia
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_write]
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MediaPatch"}
+      responses:
+        "200":
+          description: Authored media updated. Web media accept title, description, tags, and appAccess; appAccess on file media is rejected (400).
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Media"}
+        default: {$ref: "#/components/responses/Problem"}
+    delete:
+      tags: [operator]
+      operationId: deleteMedia
+      description: Removes an operator-added web page. File media cannot be deleted (409); web media used by a playlist return 409.
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_write]
+      responses:
+        "204": {description: Deleted.}
+        default: {$ref: "#/components/responses/Problem"}
+  /media/{mediaId}/refresh:
+    parameters:
+      - name: mediaId
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/Id"}
+    post:
+      tags: [operator]
+      operationId: refreshMedia
+      description: Recaptures a web media viewport now (1920x1080). 409 for file media; 503 when the controller has no headless browser.
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_write]
+      responses:
+        "200":
+          description: Media after the capture attempt; thumbnailError is set when it failed.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Media"}
+        default: {$ref: "#/components/responses/Problem"}
+  /media/{mediaId}/usage:
+    get:
+      tags: [operator]
+      operationId: getMediaUsage
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_read]
+      parameters:
+        - name: mediaId
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Id"}
+      responses:
+        "200":
+          description: Direct authored-media usage summary.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MediaUsage"}
+        default: {$ref: "#/components/responses/Problem"}
+  /media/{mediaId}/content:
+    parameters:
+      - name: mediaId
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/Id"}
+    head:
+      tags: [operator]
+      operationId: headMediaContent
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_read]
+      responses:
+        "200":
+          description: Authored-media preview metadata.
+          headers:
+            Accept-Ranges: {schema: {type: string, const: bytes}}
+            Content-Length: {schema: {type: integer, format: int64, minimum: 0}}
+            ETag: {$ref: "#/components/headers/ETag"}
+        default: {$ref: "#/components/responses/Problem"}
+    get:
+      tags: [operator]
+      operationId: getMediaContent
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_read]
+      parameters:
+        - name: Range
+          in: header
+          schema: {type: string}
+        - name: If-Range
+          in: header
+          schema: {type: string}
+      responses:
+        "200":
+          description: Complete authored-media preview bytes.
+          headers:
+            Accept-Ranges: {schema: {type: string, const: bytes}}
+            ETag: {$ref: "#/components/headers/ETag"}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        "206":
+          description: Partial authored-media preview bytes.
+          headers:
+            Content-Range: {schema: {type: string}}
+            ETag: {$ref: "#/components/headers/ETag"}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        default: {$ref: "#/components/responses/Problem"}
+  /media/{mediaId}/thumbnail:
+    parameters:
+      - name: mediaId
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/Id"}
+    get:
+      tags: [operator]
+      operationId: getMediaThumbnail
+      description: Persisted poster (file media, JPEG) or viewport capture (web media, PNG or JPEG). Pass `v={thumbnail.digest}` so the immutable response can be cached for a year.
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_read]
+      parameters:
+        - name: v
+          in: query
+          schema: {type: string, pattern: "^[a-f0-9]{64}$"}
+      responses:
+        "200":
+          description: Thumbnail bytes.
+          headers:
+            ETag: {$ref: "#/components/headers/ETag"}
+            Cache-Control: {schema: {type: string}}
+          content:
+            image/jpeg:
+              schema: {type: string, format: binary}
+            image/png:
+              schema: {type: string, format: binary}
+        "304": {description: Not modified.}
+        default: {$ref: "#/components/responses/Problem"}
+    put:
+      tags: [operator]
+      operationId: putMediaThumbnail
+      description: Stores an operator-captured poster frame for media whose format the controller cannot decode (for example video). The image is re-encoded and downscaled server-side.
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_write]
+      requestBody:
+        required: true
+        content:
+          image/png:
+            schema: {type: string, format: binary}
+          image/jpeg:
+            schema: {type: string, format: binary}
+      responses:
+        "200":
+          description: Media with its persisted thumbnail.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Media"}
+        default: {$ref: "#/components/responses/Problem"}
+  /usage/{kind}/{id}:
+    get:
+      tags: [operator]
+      operationId: getResourceUsage
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_read]
+      parameters:
+        - name: kind
+          in: path
+          required: true
+          schema: {type: string, enum: [media, playlist, release, assignment]}
+        - name: id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Id"}
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageLimit"
+      responses:
+        "200":
+          description: Direct resource references.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UsagePage"}
+        default: {$ref: "#/components/responses/Problem"}
+  /assignments:
+    get:
+      tags: [operator]
+      operationId: listAssignments
+      security: [{operatorToken: []}]
+      x-required-scopes: [assignment_read]
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/PageSort"
+        - $ref: "#/components/parameters/PageOrder"
+        - $ref: "#/components/parameters/PageSearch"
+      responses:
+        "200":
+          description: Assignments in deterministic keyset order.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AssignmentPage"}
+  /profiles:
+    get:
+      tags: [profiles]
+      operationId: listProfiles
+      security: [{operatorToken: []}]
+      x-required-scopes: [assignment_read]
+      responses:
+        "200":
+          description: Every profile ordered by name.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProfileList"}
+        default: {$ref: "#/components/responses/Problem"}
+    post:
+      tags: [profiles]
+      operationId: createProfile
+      security: [{operatorToken: []}]
+      x-required-scopes: [assignment_write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ProfileInput"}
+      responses:
+        "201":
+          description: Created profile.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Profile"}
+        default: {$ref: "#/components/responses/Problem"}
+  /profiles/active:
+    get:
+      tags: [profiles]
+      operationId: getActiveProfile
+      description: The most recently activated profile across the fleet and whether any of its screens drifted since.
+      security: [{operatorToken: []}]
+      x-required-scopes: [assignment_read]
+      responses:
+        "200":
+          description: Active profile status; profile fields are absent when no profile was ever activated.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ActiveProfile"}
+        default: {$ref: "#/components/responses/Problem"}
+  /profiles/{profileId}:
+    get:
+      tags: [profiles]
+      operationId: getProfile
+      security: [{operatorToken: []}]
+      x-required-scopes: [assignment_read]
+      parameters: [{$ref: "#/components/parameters/ProfileId"}]
+      responses:
+        "200":
+          description: Profile.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Profile"}
+        default: {$ref: "#/components/responses/Problem"}
+    put:
+      tags: [profiles]
+      operationId: updateProfile
+      description: Replaces the profile's name, description, and screens. If-Match carries the profile ETag (`"version:N"`) or bare version.
+      security: [{operatorToken: []}]
+      x-required-scopes: [assignment_write]
+      parameters:
+        - $ref: "#/components/parameters/ProfileId"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ProfileInput"}
+      responses:
+        "200":
+          description: Updated profile.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Profile"}
+        default: {$ref: "#/components/responses/Problem"}
+    delete:
+      tags: [profiles]
+      operationId: deleteProfile
+      security: [{operatorToken: []}]
+      x-required-scopes: [assignment_write]
+      parameters: [{$ref: "#/components/parameters/ProfileId"}]
+      responses:
+        "204": {description: Profile deleted.}
+        default: {$ref: "#/components/responses/Problem"}
+  /profiles/{profileId}/activate:
+    post:
+      tags: [profiles]
+      operationId: activateProfile
+      description: Assigns every screen of the profile; nodes outside the profile are untouched. Per-node failures are reported in results and do not stop other nodes.
+      security: [{operatorToken: []}]
+      x-required-scopes: [assignment_write]
+      parameters:
+        - $ref: "#/components/parameters/ProfileId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Activation with one result per profile screen.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProfileActivation"}
+        default: {$ref: "#/components/responses/Problem"}
+  /releases:
+    get:
+      tags: [operator]
+      operationId: listReleases
+      security: [{operatorToken: []}]
+      x-required-scopes: [release_read]
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/PageSort"
+        - $ref: "#/components/parameters/PageOrder"
+        - $ref: "#/components/parameters/PageSearch"
+      responses:
+        "200":
+          description: Releases in deterministic keyset order.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ReleasePage"}
+  /releases/publish:
+    post:
+      tags: [operator]
+      operationId: publishRelease
+      security: [{operatorToken: []}]
+      x-required-scopes: [release_write]
+      parameters: [{$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PublishReleaseInput"}
+      responses:
+        "201":
+          description: Immutable signed release.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ReleaseEnvelope"}
+        default: {$ref: "#/components/responses/Problem"}
+  /releases/{releaseId}:
+    get:
+      tags: [operator]
+      operationId: getRelease
+      security: [{operatorToken: []}]
+      x-required-scopes: [release_read]
+      parameters: [{$ref: "#/components/parameters/ReleaseId"}]
+      responses:
+        "200":
+          description: Release envelope.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ReleaseEnvelope"}
+        default: {$ref: "#/components/responses/Problem"}
+  /playlists:
+    get:
+      tags: [playlists]
+      operationId: listPlaylists
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_read]
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageLimit"
+      responses:
+        "200":
+          description: Playlists in deterministic keyset order.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PlaylistPage"}
+        default: {$ref: "#/components/responses/Problem"}
+    post:
+      tags: [playlists]
+      operationId: createPlaylist
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_write]
+      parameters: [{$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PlaylistInput"}
+      responses:
+        "201":
+          description: Playlist created.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Playlist"}
+        default: {$ref: "#/components/responses/Problem"}
+  /playlists/{playlistId}:
+    parameters: [{$ref: "#/components/parameters/PlaylistId"}]
+    get:
+      tags: [playlists]
+      operationId: getPlaylist
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_read]
+      responses:
+        "200":
+          description: Playlist.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Playlist"}
+        default: {$ref: "#/components/responses/Problem"}
+    patch:
+      tags: [playlists]
+      operationId: updatePlaylist
+      description: Replaces the playlist's name, description, and items.
+      security: [{operatorToken: []}]
+      x-required-scopes: [media_write]
+      parameters: [{$ref: "#/components/parameters/IfMatch"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PlaylistInput"}
+      responses:
+        "200":
+          description: Playlist updated.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Playlist"}
+        default: {$ref: "#/components/responses/Problem"}
+  /screenshots:
+    post:
+      tags: [operator]
+      operationId: createScreenshot
+      security: [{operatorToken: []}]
+      x-required-scopes: [node_write]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nodeId]
+              properties:
+                nodeId: {$ref: "#/components/schemas/Id"}
+                ttlSeconds: {type: integer, format: int64, minimum: 0}
+                expected: {$ref: "#/components/schemas/ScreenshotExpected"}
+      responses:
+        "201": {description: Screenshot queued, content: {application/json: {schema: {$ref: "#/components/schemas/ScreenshotJob"}}}}
+        "200": {description: Idempotent replay, content: {application/json: {schema: {$ref: "#/components/schemas/ScreenshotJob"}}}}
+        default: {$ref: "#/components/responses/Problem"}
+  /screenshots/{jobId}:
+    parameters: [{name: jobId, in: path, required: true, schema: {$ref: "#/components/schemas/Id"}}]
+    get:
+      tags: [operator]
+      operationId: getScreenshot
+      security: [{operatorToken: []}]
+      x-required-scopes: [node_read]
+      responses:
+        "200": {description: Screenshot job status, content: {application/json: {schema: {$ref: "#/components/schemas/ScreenshotJob"}}}}
+        default: {$ref: "#/components/responses/Problem"}
+  /screenshots/{jobId}/content:
+    parameters: [{name: jobId, in: path, required: true, schema: {$ref: "#/components/schemas/Id"}}]
+    get:
+      tags: [operator]
+      operationId: getScreenshotContent
+      security: [{operatorToken: []}]
+      x-required-scopes: [node_read]
+      responses:
+        "200":
+          description: Exact captured PNG bytes.
+          headers:
+            Cache-Control: {schema: {type: string, const: no-store}}
+            ETag: {$ref: "#/components/headers/ETag"}
+          content:
+            image/png: {schema: {type: string, format: binary}}
+        default: {$ref: "#/components/responses/Problem"}
+  /player/screenshots/next:
+    get:
+      tags: [player]
+      operationId: getNextScreenshot
+      security: [{nodeMTLS: []}]
+      responses:
+        "200": {description: Own queued screenshot, content: {application/json: {schema: {$ref: "#/components/schemas/ScreenshotJob"}}}}
+        "204": {description: No queued screenshot}
+        default: {$ref: "#/components/responses/Problem"}
+  /player/screenshots/{jobId}/claim:
+    parameters: [{name: jobId, in: path, required: true, schema: {$ref: "#/components/schemas/Id"}}]
+    post:
+      tags: [player]
+      operationId: claimScreenshot
+      security: [{nodeMTLS: []}]
+      responses:
+        "200": {description: Claimed screenshot, content: {application/json: {schema: {$ref: "#/components/schemas/ScreenshotJob"}}}}
+        default: {$ref: "#/components/responses/Problem"}
+  /player/screenshots/{jobId}/complete:
+    parameters: [{name: jobId, in: path, required: true, schema: {$ref: "#/components/schemas/Id"}}]
+    post:
+      tags: [player]
+      operationId: completeScreenshot
+      security: [{nodeMTLS: []}]
+      parameters:
+        - {name: X-Artifact-Digest, in: header, required: false, schema: {type: string, pattern: "^[0-9a-f]{64}$"}}
+      requestBody:
+        required: true
+        content:
+          image/png: {schema: {type: string, format: binary}}
+          application/json: {schema: {$ref: "#/components/schemas/ScreenshotCompletion"}}
+      responses:
+        "200": {description: Terminal screenshot job, content: {application/json: {schema: {$ref: "#/components/schemas/ScreenshotJob"}}}}
+        default: {$ref: "#/components/responses/Problem"}
+  /player/enroll:
+    post:
+      tags: [player]
+      operationId: enrollPlayer
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/EnrollPlayerInput"}
+      responses:
+        "201":
+          description: One-time client certificate and publisher trust response.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EnrollPlayerOutput"}
+        default: {$ref: "#/components/responses/Problem"}
+  /player/recover:
+    post:
+      tags: [player]
+      operationId: recoverPlayer
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/EnrollPlayerInput"}
+      responses:
+        "201":
+          description: Recredentialed existing node with a new event epoch.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EnrollPlayerOutput"}
+        default: {$ref: "#/components/responses/Problem"}
+  /player/credentials:rotate:
+    post:
+      tags: [player]
+      operationId: rotatePlayerCredential
+      security: [{nodeMTLS: []}]
+      responses:
+        "201":
+          description: One-time replacement client certificate.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ClientCredential"}
+        default: {$ref: "#/components/responses/Problem"}
+  /player/capabilities:
+    put:
+      tags: [player]
+      operationId: putPlayerCapabilities
+      security: [{nodeMTLS: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CapabilityReport"}
+      responses:
+        "204": {description: Capability report accepted.}
+        default: {$ref: "#/components/responses/Problem"}
+  /player/assignment:
+    get:
+      tags: [player]
+      operationId: getPlayerAssignment
+      security: [{nodeMTLS: []}]
+      parameters:
+        - name: If-None-Match
+          in: header
+          schema: {type: string}
+        - name: waitSeconds
+          in: query
+          schema: {type: integer, minimum: 0, maximum: 30, default: 0}
+      responses:
+        "200":
+          description: Latest desired assignment.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Assignment"}
+        "304": {description: Assignment unchanged.}
+        default: {$ref: "#/components/responses/Problem"}
+  /player/releases/{releaseId}:
+    get:
+      tags: [player]
+      operationId: getPlayerRelease
+      security: [{nodeMTLS: []}]
+      parameters: [{$ref: "#/components/parameters/ReleaseId"}]
+      responses:
+        "200":
+          description: Historically assigned release envelope.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ReleaseEnvelope"}
+        default: {$ref: "#/components/responses/Problem"}
+  /player/reports:
+    post:
+      tags: [player]
+      operationId: postPlayerReport
+      security: [{nodeMTLS: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NodeReport"}
+      responses:
+        "202": {description: New report accepted.}
+        "204": {description: Duplicate or older report ignored.}
+        default: {$ref: "#/components/responses/Problem"}
+  /player/events:append:
+    post:
+      tags: [player]
+      operationId: appendPlayerEvents
+      security: [{nodeMTLS: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [epoch, events]
+              properties:
+                epoch: {type: string, format: uuid}
+                events:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: {$ref: "#/components/schemas/NodeEvent"}
+      responses:
+        "200":
+          description: Events stored through a contiguous watermark.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [epoch, acknowledgedThrough]
+                properties:
+                  epoch: {type: string, format: uuid}
+                  acknowledgedThrough: {type: integer, format: int64, minimum: 0}
+        default: {$ref: "#/components/responses/Problem"}
+  /player/artifacts/{digest}/content:
+    parameters:
+      - $ref: "#/components/parameters/Digest"
+    head:
+      tags: [player]
+      operationId: headPlayerArtifact
+      security: [{nodeMTLS: []}]
+      responses:
+        "200":
+          description: Artifact metadata.
+          headers:
+            Accept-Ranges: {schema: {type: string, const: bytes}}
+            Content-Length: {schema: {type: integer, format: int64, minimum: 0}}
+            ETag: {$ref: "#/components/headers/ETag"}
+        default: {$ref: "#/components/responses/Problem"}
+    get:
+      tags: [player]
+      operationId: getPlayerArtifact
+      security: [{nodeMTLS: []}]
+      parameters:
+        - name: Range
+          in: header
+          schema: {type: string}
+        - name: If-Range
+          in: header
+          schema: {type: string}
+      responses:
+        "200":
+          description: Complete artifact.
+          headers:
+            Accept-Ranges: {schema: {type: string, const: bytes}}
+            ETag: {$ref: "#/components/headers/ETag"}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        "206":
+          description: One satisfiable byte range.
+          headers:
+            Content-Range: {schema: {type: string}}
+            ETag: {$ref: "#/components/headers/ETag"}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        "416":
+          description: Unsatisfiable byte range.
+          headers:
+            Content-Range: {schema: {type: string}}
+        default: {$ref: "#/components/responses/Problem"}
+  /remote/sessions/{sessionId}/events:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema: {type: string, minLength: 20, maxLength: 64}
+    post:
+      tags: [remote]
+      operationId: postRemoteEvent
+      security: []
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          schema: {type: string, pattern: "^Bearer .+$"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RemoteEvent"}
+      responses:
+        "202": {description: Remote input accepted.}
+        default: {$ref: "#/components/responses/Problem"}
+  /player/remote-sessions:
+    post:
+      tags: [player]
+      operationId: createPlayerRemoteSession
+      security: [{nodeMTLS: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [desiredGeneration]
+              properties:
+                desiredGeneration: {type: integer, format: int64, minimum: 1}
+      responses:
+        "201":
+          description: Short-lived remote session for the assigned node.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RemoteSession"}
+        default: {$ref: "#/components/responses/Problem"}
+  /player/remote-sessions/{sessionId}/events:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema: {type: string, minLength: 20, maxLength: 64}
+    get:
+      tags: [player]
+      operationId: pollPlayerRemoteEvents
+      security: [{nodeMTLS: []}]
+      parameters:
+        - name: after
+          in: query
+          schema: {type: integer, format: int64, minimum: 0, default: 0}
+        - name: waitSeconds
+          in: query
+          schema: {type: integer, minimum: 0, maximum: 30, default: 0}
+      responses:
+        "200":
+          description: Ordered remote events newer than the supplied sequence.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RemoteEventPage"}
+        default: {$ref: "#/components/responses/Problem"}
+  /player/app-tokens:
+    post:
+      tags: [player, app]
+      operationId: createAppToken
+      description: >-
+        Mints a 24h app token for a web media item with appAccess. Refused with 403 unless the
+        node's current assignment targets that media item.
+      security: [{nodeMTLS: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AppTokenRequest"}
+      responses:
+        "201":
+          description: App token for the node and media item.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AppToken"}
+        "403": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /app/context:
+    get:
+      tags: [app]
+      operationId: getAppContext
+      security: [{appToken: []}]
+      responses:
+        "200":
+          description: The node and media item the token was minted for.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AppContext"}
+        "401": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /app/media:
+    get:
+      tags: [app]
+      operationId: listAppMedia
+      security: [{appToken: []}]
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/PageSearch"
+        - name: sort
+          in: query
+          description: Sort key. Defaults to createdAt.
+          schema: {type: string, enum: [createdAt, title, size, type], default: createdAt}
+        - $ref: "#/components/parameters/PageOrder"
+        - name: kind
+          in: query
+          description: File media (uploaded assets) or web media (pages).
+          schema: {type: string, enum: [file, web]}
+        - name: mediaType
+          in: query
+          description: Narrows to file media whose artifact is an image, video, or audio type.
+          schema: {type: string, enum: [image, video, audio]}
+      responses:
+        "200":
+          description: Library media, as GET /media.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MediaPage"}
+        "401": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /app/media/{mediaId}:
+    parameters:
+      - name: mediaId
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/Id"}
+    get:
+      tags: [app]
+      operationId: getAppMedia
+      security: [{appToken: []}]
+      responses:
+        "200":
+          description: Authored media.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Media"}
+        "401": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /app/media/{mediaId}/content:
+    parameters:
+      - name: mediaId
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/Id"}
+      - $ref: "#/components/parameters/AppAccessToken"
+    head:
+      tags: [app]
+      operationId: headAppMediaContent
+      security: [{appToken: []}, {}]
+      responses:
+        "200":
+          description: Authored-media preview metadata.
+          headers:
+            Accept-Ranges: {schema: {type: string, const: bytes}}
+            Content-Length: {schema: {type: integer, format: int64, minimum: 0}}
+            ETag: {$ref: "#/components/headers/ETag"}
+        default: {$ref: "#/components/responses/Problem"}
+    get:
+      tags: [app]
+      operationId: getAppMediaContent
+      security: [{appToken: []}, {}]
+      parameters:
+        - name: Range
+          in: header
+          schema: {type: string}
+        - name: If-Range
+          in: header
+          schema: {type: string}
+      responses:
+        "200":
+          description: Complete authored-media preview bytes.
+          headers:
+            Accept-Ranges: {schema: {type: string, const: bytes}}
+            ETag: {$ref: "#/components/headers/ETag"}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        "206":
+          description: Partial authored-media preview bytes.
+          headers:
+            Content-Range: {schema: {type: string}}
+            ETag: {$ref: "#/components/headers/ETag"}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        default: {$ref: "#/components/responses/Problem"}
+  /app/media/{mediaId}/thumbnail:
+    parameters:
+      - name: mediaId
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/Id"}
+      - $ref: "#/components/parameters/AppAccessToken"
+    get:
+      tags: [app]
+      operationId: getAppMediaThumbnail
+      description: Same as GET /media/{mediaId}/thumbnail. Pass `v={thumbnail.digest}` so the immutable response can be cached for a year.
+      security: [{appToken: []}, {}]
+      parameters:
+        - name: v
+          in: query
+          schema: {type: string, pattern: "^[a-f0-9]{64}$"}
+      responses:
+        "200":
+          description: Thumbnail bytes.
+          headers:
+            ETag: {$ref: "#/components/headers/ETag"}
+            Cache-Control: {schema: {type: string}}
+          content:
+            image/jpeg:
+              schema: {type: string, format: binary}
+            image/png:
+              schema: {type: string, format: binary}
+        "304": {description: Not modified.}
+        default: {$ref: "#/components/responses/Problem"}
+  /app/playlists:
+    get:
+      tags: [app]
+      operationId: listAppPlaylists
+      security: [{appToken: []}]
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageLimit"
+      responses:
+        "200":
+          description: Playlists, as GET /playlists.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PlaylistPage"}
+        "401": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /app/playlists/{playlistId}:
+    parameters: [{$ref: "#/components/parameters/PlaylistId"}]
+    get:
+      tags: [app]
+      operationId: getAppPlaylist
+      security: [{appToken: []}]
+      responses:
+        "200":
+          description: Playlist.
+          headers: {ETag: {$ref: "#/components/headers/ETag"}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Playlist"}
+        "401": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /app/remote/events:
+    get:
+      tags: [app]
+      operationId: pollAppRemoteEvents
+      security: [{appToken: []}]
+      parameters:
+        - name: after
+          in: query
+          schema: {type: integer, format: int64, minimum: 0, default: 0}
+        - name: waitSeconds
+          in: query
+          schema: {type: integer, minimum: 0, maximum: 25, default: 0}
+      responses:
+        "200":
+          description: Remote events of the node's active phone-remote session newer than after; long-polls up to waitSeconds.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AppRemoteEventPage"}
+        "401": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /app/token:renew:
+    post:
+      tags: [app]
+      operationId: renewAppToken
+      security: [{appToken: []}]
+      responses:
+        "200":
+          description: Successor app token; refused with 401 once the node is no longer assigned the media item.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AppToken"}
+        "401": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /browser-nodes:
+    get:
+      tags: [operator]
+      operationId: listBrowserNodes
+      security: [{operatorToken: []}]
+      x-required-scopes: [node_read]
+      responses:
+        "200":
+          description: Unrevoked browser nodes with credential and presence details.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/BrowserNode"}}
+        default: {$ref: "#/components/responses/Problem"}
+  /browser-nodes/claims:
+    post:
+      tags: [operator]
+      operationId: claimBrowserNode
+      description: Redeems the code shown on a browser node's pairing screen and creates a node of class browser.
+      security: [{operatorToken: []}]
+      x-required-scopes: [node_enroll]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code, name]
+              properties:
+                code: {type: string, description: "Claim code; case, spaces, and dashes are ignored.", minLength: 8, maxLength: 32}
+                name: {type: string, minLength: 1, maxLength: 120}
+      responses:
+        "201":
+          description: Browser node created; the browser collects its credential on its next poll.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BrowserNode"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /browser-nodes/{nodeId}/revoke:
+    post:
+      tags: [operator]
+      operationId: revokeBrowserNode
+      security: [{operatorToken: []}]
+      x-required-scopes: [security_admin]
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+      responses:
+        "204": {description: Browser node and all its credentials revoked.}
+        "404": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /browser-node/claims:
+    post:
+      tags: [browser-node]
+      operationId: startBrowserNodeClaim
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                userAgent: {type: string, maxLength: 300}
+      responses:
+        "201":
+          description: Pending claim; display code/QR and poll with pollToken.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BrowserNodeClaim"}
+        default: {$ref: "#/components/responses/Problem"}
+  /browser-node/claims/{claimId}:
+    get:
+      tags: [browser-node]
+      operationId: pollBrowserNodeClaim
+      description: Authorization is `Bearer <pollToken>`. The credential is returned exactly once; later polls return 410.
+      security: [{browserClaimToken: []}]
+      parameters:
+        - {name: claimId, in: path, required: true, schema: {$ref: "#/components/schemas/Id"}}
+      responses:
+        "200":
+          description: Claim status.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BrowserNodeClaimStatus"}
+        "401": {$ref: "#/components/responses/Problem"}
+        "410": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /browser-node/credentials:renew:
+    post:
+      tags: [browser-node]
+      operationId: renewBrowserNodeCredential
+      security: [{browserNodeToken: []}]
+      responses:
+        "200":
+          description: Replacement credential; the presented token stops working.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BrowserCredential"}
+        "401": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+  /browser-node/player/app-tokens:
+    post:
+      tags: [browser-node, app]
+      operationId: createBrowserNodeAppToken
+      description: Browser-node equivalent of POST /player/app-tokens.
+      security: [{browserNodeToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AppTokenRequest"}
+      responses:
+        "201":
+          description: App token for the node and media item.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AppToken"}
+        "401": {$ref: "#/components/responses/Problem"}
+        "403": {$ref: "#/components/responses/Problem"}
+        default: {$ref: "#/components/responses/Problem"}
+components:
+  securitySchemes:
+    operatorToken:
+      type: http
+      scheme: bearer
+      bearerFormat: CableToken
+    nodeMTLS:
+      type: mutualTLS
+    browserNodeToken:
+      type: http
+      scheme: bearer
+      bearerFormat: CableBrowserNodeToken
+    appToken:
+      type: http
+      scheme: bearer
+      bearerFormat: CableAppToken
+    browserClaimToken:
+      type: http
+      scheme: bearer
+      bearerFormat: CableBrowserClaimPollToken
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, minLength: 16, maxLength: 200}
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema: {type: string}
+    NodeId: {name: nodeId, in: path, required: true, schema: {$ref: "#/components/schemas/Id"}}
+    TokenId: {name: tokenId, in: path, required: true, schema: {$ref: "#/components/schemas/Id"}}
+    UploadId: {name: uploadId, in: path, required: true, schema: {$ref: "#/components/schemas/Id"}}
+    AssetId: {name: assetId, in: path, required: true, schema: {$ref: "#/components/schemas/Id"}}
+    ReleaseId: {name: releaseId, in: path, required: true, schema: {$ref: "#/components/schemas/Id"}}
+    PlaylistId: {name: playlistId, in: path, required: true, schema: {$ref: "#/components/schemas/Id"}}
+    AppAccessToken:
+      name: access_token
+      in: query
+      description: App token for media elements that cannot send an Authorization header.
+      schema: {type: string}
+    ProfileId: {name: profileId, in: path, required: true, schema: {$ref: "#/components/schemas/Id"}}
+    PageCursor:
+      name: cursor
+      in: query
+      description: Opaque, server-issued keyset cursor.
+      schema: {type: string, maxLength: 2048}
+    PageLimit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 100, default: 25}
+    PageSort:
+      name: sort
+      in: query
+      schema: {type: string}
+    PageOrder:
+      name: order
+      in: query
+      schema: {type: string, enum: [asc, desc], default: asc}
+    PageSearch:
+      name: search
+      in: query
+      schema: {type: string, maxLength: 200}
+    Digest:
+      name: digest
+      in: path
+      required: true
+      schema: {type: string, pattern: "^[a-f0-9]{64}$"}
+  headers:
+    ETag: {schema: {type: string}}
+  responses:
+    Problem:
+      description: RFC 9457 problem details.
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+  schemas:
+    ScreenshotExpected:
+      type: object
+      properties:
+        expected: {type: boolean}
+        releaseDigest: {type: string, pattern: "^[a-f0-9]{64}$"}
+        itemId: {type: string}
+        effectiveAt: {type: string, format: date-time}
+    ScreenshotCompletion:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [completed, failed, unsupported]}
+        artifactDigest: {type: string, pattern: "^[a-f0-9]{64}$"}
+        mediaType: {type: string}
+        errorReason: {type: string}
+    ScreenshotJob:
+      type: object
+      required: [id, nodeId, expected, requestedAt, expiresAt, status, retentionPolicy, retentionUntil, artifactRetentionUntil]
+      properties:
+        id: {$ref: "#/components/schemas/Id"}
+        nodeId: {$ref: "#/components/schemas/Id"}
+        expected: {$ref: "#/components/schemas/ScreenshotExpected"}
+        requestedAt: {type: string, format: date-time}
+        expiresAt: {type: string, format: date-time}
+        claimedAt: {type: string, format: date-time}
+        completionAt: {type: string, format: date-time}
+        status: {type: string, enum: [queued, claimed, completed, failed, unsupported, expired]}
+        resultArtifactDigest: {type: string, pattern: "^[a-f0-9]{64}$"}
+        resultMediaType: {type: string}
+        errorReason: {type: string}
+        retentionPolicy: {type: string}
+        retentionUntil: {type: string, format: date-time}
+        artifactRetentionUntil: {type: string, format: date-time}
+    Id: {type: string, format: uuid}
+    ProfileScreen:
+      type: object
+      additionalProperties: false
+      description: One node's saved assignment. Exactly one of mediaId and playlistId is set.
+      required: [nodeId, remoteInput, showQr]
+      properties:
+        nodeId: {$ref: "#/components/schemas/Id"}
+        mediaId: {$ref: "#/components/schemas/Id"}
+        playlistId: {$ref: "#/components/schemas/Id"}
+        deliveryMode: {type: string, enum: [stream, cache_then_play], description: Omitted uses the server default for the media.}
+        remoteInput: {type: boolean}
+        showQr: {type: boolean}
+        settings: {type: object, additionalProperties: true, description: Reserved per-screen settings.}
+    ProfileInput:
+      type: object
+      additionalProperties: false
+      required: [name, screens]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        description: {type: string, maxLength: 2000}
+        screens: {type: array, items: {$ref: "#/components/schemas/ProfileScreen"}}
+    Profile:
+      type: object
+      additionalProperties: false
+      required: [id, name, description, version, screens, createdBy, updatedBy, createdAt, updatedAt, active]
+      properties:
+        id: {$ref: "#/components/schemas/Id"}
+        name: {type: string}
+        description: {type: string}
+        version: {type: integer, format: int64, minimum: 1}
+        screens: {type: array, items: {$ref: "#/components/schemas/ProfileScreen"}}
+        createdBy: {$ref: "#/components/schemas/Id"}
+        updatedBy: {$ref: "#/components/schemas/Id"}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        lastActivatedAt: {type: string, format: date-time}
+        active: {type: boolean, description: Whether this is the most recently activated profile.}
+    ProfileList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Profile"}}
+    ProfileActivationResult:
+      type: object
+      additionalProperties: false
+      required: [nodeId]
+      properties:
+        nodeId: {$ref: "#/components/schemas/Id"}
+        assignmentId: {$ref: "#/components/schemas/Id"}
+        error: {type: string}
+    ProfileActivation:
+      type: object
+      additionalProperties: false
+      required: [id, profileId, activatedAt, activatedBy, results]
+      properties:
+        id: {$ref: "#/components/schemas/Id"}
+        profileId: {$ref: "#/components/schemas/Id"}
+        activatedAt: {type: string, format: date-time}
+        activatedBy: {$ref: "#/components/schemas/Id"}
+        results: {type: array, items: {$ref: "#/components/schemas/ProfileActivationResult"}}
+    ProfileDrift:
+      type: object
+      additionalProperties: false
+      required: [nodeId, reason]
+      properties:
+        nodeId: {$ref: "#/components/schemas/Id"}
+        reason: {type: string, enum: [assignment_changed, unassigned, node_missing]}
+    ActiveProfile:
+      type: object
+      additionalProperties: false
+      required: [drifted, drift]
+      properties:
+        profileId: {$ref: "#/components/schemas/Id"}
+        profileName: {type: string}
+        activatedAt: {type: string, format: date-time}
+        drifted: {type: boolean}
+        drift: {type: array, items: {$ref: "#/components/schemas/ProfileDrift"}}
+    Health:
+      type: object
+      required: [status, version]
+      properties:
+        status: {type: string, const: ok}
+        version: {type: string}
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type: {type: string, format: uri-reference}
+        title: {type: string}
+        status: {type: integer, minimum: 400, maximum: 599}
+        detail: {type: string}
+        instance: {type: string, format: uri-reference}
+        correlationId: {type: string}
+    OperatorMe:
+      type: object
+      required: [id, scopes, capabilities]
+      properties:
+        id: {type: string}
+        tokenId: {type: string}
+        scopes: {type: array, items: {type: string}}
+        capabilities: {type: object, additionalProperties: {type: boolean}}
+    PageInfo:
+      type: object
+      required: [nextCursor, previousCursor, hasMore]
+      properties:
+        nextCursor: {type: [string, "null"]}
+        previousCursor: {type: [string, "null"]}
+        hasMore: {type: boolean}
+    PlaylistItemInput:
+      type: object
+      additionalProperties: false
+      description: Exactly one of mediaId (any file or web media item) or assetId (file asset) is required.
+      required: [position, durationSeconds]
+      properties:
+        mediaId: {$ref: "#/components/schemas/Id"}
+        assetId: {$ref: "#/components/schemas/Id"}
+        position: {type: integer, minimum: 1}
+        durationSeconds: {type: integer, minimum: 1}
+        title: {type: string}
+        subtitle: {type: string}
+    PlaylistInput:
+      type: object
+      additionalProperties: false
+      required: [name, items]
+      properties:
+        name: {type: string, minLength: 1}
+        description: {type: string}
+        items:
+          type: array
+          minItems: 1
+          items: {$ref: "#/components/schemas/PlaylistItemInput"}
+    PlaylistItem:
+      type: object
+      additionalProperties: false
+      description: >-
+        mediaId is set whenever the item's media row exists (file items resolve to their file
+        media row); assetId is set only for file items. Clients re-submitting items send exactly
+        one source: mediaId when present, otherwise assetId.
+      required: [id, playlistId, position, durationSeconds, title, subtitle]
+      properties:
+        id: {$ref: "#/components/schemas/Id"}
+        playlistId: {$ref: "#/components/schemas/Id"}
+        mediaId: {$ref: "#/components/schemas/Id"}
+        assetId: {$ref: "#/components/schemas/Id"}
+        position: {type: integer, minimum: 1}
+        durationSeconds: {type: integer, minimum: 1}
+        title: {type: string}
+        subtitle: {type: string}
+    Playlist:
+      type: object
+      additionalProperties: false
+      required: [id, name, description, items, version, createdBy, createdAt, updatedAt]
+      properties:
+        id: {$ref: "#/components/schemas/Id"}
+        name: {type: string}
+        description: {type: string}
+        items: {type: array, items: {$ref: "#/components/schemas/PlaylistItem"}}
+        version: {type: integer, format: int64, minimum: 1}
+        createdBy: {$ref: "#/components/schemas/Id"}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    PlaylistPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Playlist"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    AppTokenRequest:
+      type: object
+      additionalProperties: false
+      required: [mediaId]
+      properties:
+        mediaId: {description: Web media item with appAccess that the node's current assignment targets., $ref: "#/components/schemas/Id"}
+    AppToken:
+      type: object
+      additionalProperties: false
+      required: [token, expiresAt, apiUrl]
+      properties:
+        token: {type: string, minLength: 1}
+        expiresAt: {type: string, format: date-time}
+        apiUrl: {type: string, format: uri, description: "Public API base of the control plane, e.g. https://control.example/api/v1."}
+    AppContext:
+      type: object
+      additionalProperties: false
+      required: [nodeId, nodeName, mediaId]
+      properties:
+        nodeId: {$ref: "#/components/schemas/Id"}
+        nodeName: {type: string}
+        mediaId: {$ref: "#/components/schemas/Id"}
+    AppRemote:
+      type: object
+      additionalProperties: false
+      description: The node's active phone-remote session; the page renders the QR for url when showQr is set.
+      required: [url, showQr, expiresAt]
+      properties:
+        url: {type: string, format: uri}
+        showQr: {type: boolean}
+        expiresAt: {type: string, format: date-time}
+    AppRemoteEventPage:
+      type: object
+      additionalProperties: false
+      required: [events, nextSequence]
+      properties:
+        events:
+          type: array
+          items: {$ref: "#/components/schemas/RemoteEvent"}
+        nextSequence: {type: integer, format: int64, minimum: 0}
+        remote: {$ref: "#/components/schemas/AppRemote"}
+    NodePage:
+      type: object
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Node"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    AssetPage:
+      type: object
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Asset"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    EventPage:
+      type: object
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/NodeEvent"}}
+        nextCursor: {type: [string, "null"]}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    UploadPage:
+      type: object
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Upload"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    ReleasePage:
+      type: object
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/ReleaseEnvelope"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    AssignmentPage:
+      type: object
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Assignment"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    AdminToken:
+      type: object
+      required: [id, prefix, scopes, revoked]
+      properties:
+        id: {$ref: "#/components/schemas/Id"}
+        prefix: {type: string}
+        scopes: {type: array, items: {type: string}}
+        revoked: {type: boolean}
+    EnrollmentTokenCreated:
+      type: object
+      required: [id, secret, expiresAt]
+      properties:
+        id: {$ref: "#/components/schemas/Id"}
+        secret: {type: string, writeOnly: true}
+        expiresAt: {type: string, format: date-time}
+    RemoteLink:
+      type: object
+      required: [sessionId, remoteUrl, expiresAt]
+      properties:
+        sessionId: {type: string}
+        remoteUrl: {type: string, format: uri}
+        expiresAt: {type: string, format: date-time}
+    Node:
+      type: object
+      required: [id, name, credentialState]
+      properties:
+        id: {$ref: "#/components/schemas/Id"}
+        name: {type: string}
+        credentialState: {type: string, enum: [active, revoked, expired]}
+        nodeClass: {type: string, enum: [native, browser]}
+        desiredGeneration: {type: integer, format: int64, minimum: 0}
+        observedGeneration: {type: integer, format: int64, minimum: 0}
+    BrowserNode:
+      type: object
+      required: [id, name, nodeClass, credentialState, createdAt]
+      properties:
+        id: {$ref: "#/components/schemas/Id"}
+        name: {type: string}
+        nodeClass: {type: string, enum: [browser]}
+        credentialState: {type: string, enum: [active, revoked, expired]}
+        credentialExpiresAt: {type: string, format: date-time}
+        lastSeenAt: {type: string, format: date-time}
+        userAgent: {type: string}
+        createdAt: {type: string, format: date-time}
+    BrowserNodeClaim:
+      type: object
+      required: [claimId, code, displayCode, pollToken, expiresAt, pollIntervalSeconds]
+      properties:
+        claimId: {$ref: "#/components/schemas/Id"}
+        code: {type: string, pattern: "^[A-Z0-9]{8}$"}
+        displayCode: {type: string, description: "Code formatted for display, e.g. K7QM-4XPD."}
+        pollToken: {type: string}
+        expiresAt: {type: string, format: date-time}
+        pollIntervalSeconds: {type: integer, minimum: 1}
+        pairUrl: {type: string, format: uri, description: "Operator console pair page with the code prefilled (QR target)."}
+    BrowserCredential:
+      type: object
+      required: [nodeId, token, expiresAt, renewAfter, eventEpoch]
+      properties:
+        nodeId: {$ref: "#/components/schemas/Id"}
+        token: {type: string}
+        expiresAt: {type: string, format: date-time}
+        renewAfter: {type: string, format: date-time}
+        eventEpoch: {type: string, description: "Report/event epoch for player reports."}
+    BrowserNodeClaimStatus:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [pending, claimed]}
+        expiresAt: {type: string, format: date-time}
+        credential: {$ref: "#/components/schemas/BrowserCredential"}
+    UploadCreate:
+      type: object
+      required: [name, length, mediaType]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 255}
+        length: {type: integer, format: int64, minimum: 1}
+        mediaType: {type: string}
+    Upload:
+      type: object
+      additionalProperties: false
+      required: [id, name, length, offset, mediaType, state]
+      properties:
+        id: {$ref: "#/components/schemas/Id"}
+        name: {type: string, minLength: 1, maxLength: 255}
+        length: {type: integer, format: int64, minimum: 1}
+        offset: {type: integer, format: int64, minimum: 0}
+        mediaType: {type: string}
+        state: {type: string, enum: [open, finalizing, complete, failed]}
+        artifactDigest: {type: string, pattern: "^[a-f0-9]{64}$"}
+    Artifact:
+      type: object
+      required: [digest, size, mediaType]
+      properties:
+        digest: {type: string, pattern: "^[a-f0-9]{64}$"}
+        size: {type: integer, format: int64, minimum: 1}
+        mediaType: {type: string}
+        state: {type: string, enum: [ready, quarantined, missing]}
+    Asset:
+      type: object
+      required: [id, name, artifact]
+      properties:
+        id: {$ref: "#/components/schemas/Id"}
+        name: {type: string}
+        artifact: {$ref: "#/components/schemas/Artifact"}
+    MediaPlayback:
+      type: object
+      additionalProperties: false
+      required: [fit, loop, muted, volume, orientation]
+      properties:
+        fit: {type: string, enum: [fit, fill]}
+        loop: {type: boolean}
+        muted: {type: boolean}
+        volume: {type: integer, minimum: 0, maximum: 100}
+        orientation: {type: integer, enum: [0, 90, 180, 270]}
+    MediaInput:
+      type: object
+      additionalProperties: false
+      description: "File media: assetId, title, tags, playback. Web media: kind web, url, optional title (defaults to the URL)."
+      properties:
+        kind: {type: string, enum: [file, web], default: file}
+        assetId: {$ref: "#/components/schemas/Id"}
+        url: {type: string, format: uri, description: Absolute http or https URL without userinfo (web media).}
+        title: {type: string, minLength: 1, maxLength: 255}
+        description: {type: string, maxLength: 4096}
+        artist: {type: string, maxLength: 255}
+        tags: {type: array, maxItems: 64, uniqueItems: true, items: {type: string, minLength: 1, maxLength: 128}}
+        artworkAssetId: {$ref: "#/components/schemas/Id"}
+        playback: {$ref: "#/components/schemas/MediaPlayback"}
+        appAccess: {type: boolean, default: false, description: "Web media only: present the page as a Cuelight app with an app token (see the app tag)."}
+    MediaPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        title: {type: string, minLength: 1, maxLength: 255}
+        description: {type: string, maxLength: 4096}
+        artist: {type: string, maxLength: 255}
+        tags: {type: array, maxItems: 64, uniqueItems: true, items: {type: string, minLength: 1, maxLength: 128}}
+        artworkAssetId: {$ref: "#/components/schemas/Id"}
+        playback: {$ref: "#/components/schemas/MediaPlayback"}
+        appAccess: {type: boolean, description: Web media only; 400 for file media.}
+    Media:
+      type: object
+      additionalProperties: false
+      required: [id, kind, title, tags, appAccess, version, createdBy, updatedBy, createdAt, updatedAt]
+      properties:
+        id: {$ref: "#/components/schemas/Id"}
+        kind: {type: string, enum: [file, web]}
+        assetId: {description: File media only., $ref: "#/components/schemas/Id"}
+        url: {type: string, format: uri, description: "Web media: the page URL."}
+        appAccess: {type: boolean, description: "Web media presented as a Cuelight app with access to the screen's remote and the media library. Always false for file media."}
+        faviconUrl: {type: string, format: uri}
+        thumbnailError: {type: string, description: Last web capture failure.}
+        thumbnailAttemptedAt: {type: string, format: date-time}
+        title: {type: string}
+        description: {type: string}
+        artist: {type: string}
+        tags: {type: array, items: {type: string}}
+        artworkAssetId: {$ref: "#/components/schemas/Id"}
+        playback: {description: File media only., $ref: "#/components/schemas/MediaPlayback"}
+        artifact: {description: File media only., $ref: "#/components/schemas/Artifact"}
+        version: {type: integer, format: int64, minimum: 1}
+        createdBy: {$ref: "#/components/schemas/Id"}
+        updatedBy: {$ref: "#/components/schemas/Id"}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        thumbnail: {$ref: "#/components/schemas/MediaThumbnail"}
+    MediaThumbnail:
+      type: object
+      additionalProperties: false
+      required: [digest, mediaType, width, height]
+      properties:
+        digest: {type: string, pattern: "^[a-f0-9]{64}$"}
+        mediaType: {type: string, enum: [image/jpeg, image/png]}
+        width: {type: integer, minimum: 1}
+        height: {type: integer, minimum: 1}
+        source: {type: string, enum: [server, node], description: "Web media: server is a headless capture on the controller; node is a screenshot from a screen showing the page."}
+        capturedAt: {type: string, format: date-time}
+    MediaUsage:
+      type: object
+      additionalProperties: false
+      required: [mediaId, releaseCount, scheduleCount]
+      properties:
+        mediaId: {$ref: "#/components/schemas/Id"}
+        releaseCount: {type: integer, format: int64, minimum: 0}
+        scheduleCount: {type: integer, format: int64, minimum: 0}
+    MediaPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Media"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    UsageReference:
+      type: object
+      additionalProperties: false
+      required: [kind, id, name, href]
+      properties:
+        kind: {type: string, enum: [media, playlist, release, assignment]}
+        id: {$ref: "#/components/schemas/Id"}
+        name: {type: string}
+        href: {type: string, pattern: "^/"}
+    UsagePage:
+      type: object
+      additionalProperties: false
+      required: [resourceId, references, hasMore]
+      properties:
+        resourceId: {$ref: "#/components/schemas/Id"}
+        references: {type: array, items: {$ref: "#/components/schemas/UsageReference"}}
+        nextCursor: {type: string}
+        hasMore: {type: boolean}
+    PlaybackPayload:
+      type: object
+      required: [assetId, fit, loop, muted, volume, orientation, allowedDeliveryModes]
+      properties:
+        assetId: {$ref: "#/components/schemas/Id"}
+        fit: {type: string, enum: [fit, fill]}
+        loop: {type: boolean}
+        muted: {type: boolean}
+        volume: {type: integer, minimum: 0, maximum: 100}
+        imageDurationSeconds: {type: integer, minimum: 1, maximum: 86400}
+        orientation: {type: integer, enum: [0, 90, 180, 270]}
+        allowedDeliveryModes:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, enum: [stream, cache_then_play]}
+    MediaPresentation:
+      type: object
+      required: [playback]
+      properties:
+        playback: {$ref: "#/components/schemas/PlaybackPayload"}
+    MediaScheduleWindow:
+      type: object
+      additionalProperties: false
+      required: [startsAt, endsAt]
+      properties:
+        startsAt: {type: string, format: date-time}
+        endsAt: {type: string, format: date-time}
+    MediaScheduleItem:
+      type: object
+      additionalProperties: false
+      description: A file item (artifactDigest, mediaType, playback fields) or a web item (web.url). Releases with web items require the web feature.
+      required: [id, startsAt, endsAt]
+      properties:
+        id: {type: string, minLength: 1}
+        startsAt: {type: string, format: date-time}
+        endsAt: {type: string, format: date-time}
+        web:
+          type: object
+          additionalProperties: false
+          required: [url]
+          properties:
+            url: {type: string, format: uri}
+        artifactDigest: {type: string, pattern: "^[a-f0-9]{64}$"}
+        mediaType: {type: string}
+        fit: {type: string, enum: [fit, fill]}
+        loop: {type: boolean}
+        muted: {type: boolean}
+        volume: {type: integer, minimum: 0, maximum: 100}
+        imageDurationSeconds: {type: integer, minimum: 1, maximum: 86400}
+        orientation: {type: integer, enum: [0, 90, 180, 270]}
+    MediaSchedulePresentation:
+      type: object
+      additionalProperties: false
+      required: [timezone, window, items, artifactClosure, allowedDeliveryModes]
+      properties:
+        timezone: {type: string, minLength: 1}
+        window: {$ref: "#/components/schemas/MediaScheduleWindow"}
+        items:
+          type: array
+          minItems: 1
+          items: {$ref: "#/components/schemas/MediaScheduleItem"}
+        artifactClosure:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, pattern: "^[a-f0-9]{64}$"}
+        allowedDeliveryModes:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, enum: [stream, cache_then_play]}
+    WebPresentation:
+      type: object
+      required: [url]
+      properties:
+        url: {type: string, format: uri, description: Absolute http or https URL without userinfo.}
+        appAccess: {type: boolean, description: "The page is a Cuelight app: the node mints an app token for mediaId and passes it in the URL fragment (see the app tag)."}
+        mediaId: {description: Web media item the release presents; set when appAccess is true., $ref: "#/components/schemas/Id"}
+    ReleasePresentation:
+      type: object
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [media, media-schedule, web]}
+        media: {$ref: "#/components/schemas/MediaPresentation"}
+        mediaSchedule: {$ref: "#/components/schemas/MediaSchedulePresentation"}
+        web: {$ref: "#/components/schemas/WebPresentation"}
+      discriminator: {propertyName: kind}
+      oneOf:
+        - type: object
+          required: [kind, media]
+          properties:
+            kind: {type: string, const: media}
+            media: {$ref: "#/components/schemas/MediaPresentation"}
+        - type: object
+          required: [kind, mediaSchedule]
+          properties:
+            kind: {type: string, const: media-schedule}
+            mediaSchedule: {$ref: "#/components/schemas/MediaSchedulePresentation"}
+        - type: object
+          required: [kind, web]
+          properties:
+            kind: {type: string, const: web}
+            web: {$ref: "#/components/schemas/WebPresentation"}
+    PublishReleaseInput:
+      type: object
+      required: [playback]
+      properties:
+        playback: {$ref: "#/components/schemas/PlaybackPayload"}
+    ReleasePayload:
+      type: object
+      required: [schemaVersion, minimumProtocolVersion, artifacts, requiredFeatures]
+      oneOf:
+        - required: [presentation]
+        - required: [playback]
+      properties:
+        schemaVersion: {type: string, enum: ["1.0", "1.1"]}
+        minimumProtocolVersion: {type: string}
+        presentation: {$ref: "#/components/schemas/ReleasePresentation"}
+        playback: {$ref: "#/components/schemas/PlaybackPayload"}
+        artifacts: {type: array, minItems: 1, items: {$ref: "#/components/schemas/Artifact"}}
+        requiredFeatures: {type: array, items: {type: string}, uniqueItems: true}
+    ReleaseEnvelope:
+      type: object
+      required: [id, digest, keyId, signature, payload]
+      properties:
+        id: {$ref: "#/components/schemas/Id"}
+        digest: {type: string, pattern: "^[a-f0-9]{64}$"}
+        keyId: {type: string}
+        signature: {type: string, contentEncoding: base64}
+        payload: {$ref: "#/components/schemas/ReleasePayload"}
+    AssignmentInput:
+      type: object
+      additionalProperties: false
+      description: Targets exactly one of mediaId or playlistId. The server publishes or reuses the signed release that presents it (file media → media, web media → web, playlists → media-schedule).
+      required: [expectedGeneration]
+      properties:
+        mediaId: {$ref: "#/components/schemas/Id"}
+        playlistId: {$ref: "#/components/schemas/Id"}
+        deliveryMode: {type: string, enum: [stream, cache_then_play], description: "Defaults to cache_then_play when the release allows it, otherwise stream."}
+        expectedGeneration: {type: integer, format: int64, minimum: 0}
+        remoteInput: {type: boolean, default: false}
+        showQr: {type: boolean, default: false}
+    Assignment:
+      type: object
+      required: [id, nodeId, releaseId, releaseDigest, deliveryMode, expectedGeneration, desiredGeneration, remoteInput, showQr]
+      properties:
+        id: {$ref: "#/components/schemas/Id"}
+        nodeId: {$ref: "#/components/schemas/Id"}
+        mediaId: {$ref: "#/components/schemas/Id"}
+        playlistId: {$ref: "#/components/schemas/Id"}
+        releaseId: {description: Read-only audit of the release the server published or reused., $ref: "#/components/schemas/Id"}
+        releaseDigest: {type: string, pattern: "^[a-f0-9]{64}$"}
+        deliveryMode: {type: string, enum: [stream, cache_then_play]}
+        expectedGeneration: {type: integer, format: int64, minimum: 0}
+        desiredGeneration: {type: integer, format: int64, minimum: 1}
+        remoteInput: {type: boolean}
+        showQr: {type: boolean}
+        presentationKind: {type: string, enum: [media, media-schedule, web]}
+    RemoteEvent:
+      type: object
+      additionalProperties: false
+      required: [sequence, type]
+      properties:
+        sequence: {type: integer, format: int64, minimum: 1}
+        type: {type: string, enum: [key, text, pointer, wheel]}
+        key: {type: string, enum: [ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Enter, Escape, Backspace, Tab, VolumeUp, VolumeDown, Mute, ChannelUp, ChannelDown, Guide, Info, Delete, Home, End, PageUp, PageDown, Space, BrowserBack, BrowserForward, BrowserReload]}
+        text: {type: string, minLength: 1, maxLength: 4096}
+        x: {type: number, minimum: 0, maximum: 1}
+        y: {type: number, minimum: 0, maximum: 1}
+        deltaX: {type: number, minimum: -10, maximum: 10}
+        deltaY: {type: number, minimum: -10, maximum: 10}
+        button: {type: string, enum: [left, right, middle]}
+        state: {type: string, enum: [move, down, up, click]}
+    RemoteSession:
+      type: object
+      additionalProperties: false
+      required: [sessionId, token, remoteUrl, showQr, expiresAt]
+      properties:
+        sessionId: {type: string}
+        token: {type: string, writeOnly: true}
+        remoteUrl: {type: string, format: uri}
+        showQr: {type: boolean}
+        expiresAt: {type: string, format: date-time}
+    RemoteEventPage:
+      type: object
+      additionalProperties: false
+      required: [events, nextSequence]
+      properties:
+        events:
+          type: array
+          items: {$ref: "#/components/schemas/RemoteEvent"}
+        nextSequence: {type: integer, format: int64, minimum: 0}
+    EnrollPlayerInput:
+      type: object
+      required: [token, publicKey]
+      properties:
+        token: {type: string, writeOnly: true}
+        publicKey: {type: string, contentEncoding: base64}
+        name: {type: string, minLength: 1, maxLength: 120}
+    ClientCredential:
+      type: object
+      required: [certificate, expiresAt]
+      properties:
+        certificate: {type: string, writeOnly: true}
+        expiresAt: {type: string, format: date-time}
+    EnrollPlayerOutput:
+      allOf:
+        - $ref: "#/components/schemas/ClientCredential"
+        - type: object
+          required: [nodeId, eventEpoch, publisherKeyId, publisherPublicKey]
+          properties:
+            nodeId: {$ref: "#/components/schemas/Id"}
+            eventEpoch: {type: string, format: uuid}
+            publisherKeyId: {type: string}
+            publisherPublicKey: {type: string, contentEncoding: base64}
+    CapabilityReport:
+      type: object
+      required: [platform, architecture, protocolVersion, rendererVersion, profileId]
+      properties:
+        platform: {type: string}
+        architecture: {type: string}
+        protocolVersion: {type: string}
+        rendererVersion: {type: string}
+        profileId: {type: string}
+        features: {type: array, items: {type: string}, uniqueItems: true}
+        acceptedMediaTypes: {type: array, items: {type: string}, uniqueItems: true}
+        freeBytes: {type: integer, format: int64, minimum: 0}
+        outputReady: {type: boolean}
+        clockReliable: {type: boolean}
+    CurrentContent:
+      type: object
+      additionalProperties: false
+      required: [releaseDigest, presentationKind, state, transitionedAt]
+      properties:
+        releaseDigest: {type: string, pattern: "^[a-f0-9]{64}$"}
+        presentationKind: {type: string, enum: [media, media-schedule, web]}
+        state: {type: string, enum: [playing, paused, off_air, stale]}
+        itemId: {$ref: "#/components/schemas/Id"}
+        mediaId: {$ref: "#/components/schemas/Id"}
+        assetId: {$ref: "#/components/schemas/Id"}
+        startedAt: {type: string, format: date-time}
+        transitionedAt: {type: string, format: date-time}
+        positionMs: {type: integer, format: int64, minimum: 0}
+        width: {type: integer, format: int32, minimum: 1}
+        height: {type: integer, format: int32, minimum: 1}
+    NodeReport:
+      type: object
+      required: [eventEpoch, sequence, desiredGenerationSeen, observedGeneration, presentationKind, conditions]
+      properties:
+        eventEpoch: {type: string, format: uuid}
+        sequence: {type: integer, format: int64, minimum: 1}
+        desiredGenerationSeen: {type: integer, format: int64, minimum: 0}
+        observedGeneration: {type: integer, format: int64, minimum: 0}
+        presentationKind: {type: [string, "null"], enum: [media, media-schedule, web, null]}
+        renderingReleaseDigest: {type: [string, "null"], pattern: "^[a-f0-9]{64}$"}
+        candidateReleaseDigest: {type: [string, "null"], pattern: "^[a-f0-9]{64}$"}
+        healthyReleaseDigest: {type: [string, "null"], pattern: "^[a-f0-9]{64}$"}
+        lastKnownGoodReleaseDigest: {type: [string, "null"], pattern: "^[a-f0-9]{64}$"}
+        currentContent: {$ref: "#/components/schemas/CurrentContent"}
+        reportedAt: {type: string, format: date-time}
+        conditions: {type: array, items: {$ref: "#/components/schemas/Condition"}}
+    Condition:
+      type: object
+      required: [type, status, reason]
+      properties:
+        type: {type: string}
+        status: {type: boolean}
+        reason: {type: string}
+        message: {type: string}
+    NodeEvent:
+      type: object
+      required: [id, epoch, sequence, type, occurredAt]
+      properties:
+        id: {type: string, format: uuid}
+        epoch: {type: string, format: uuid}
+        sequence: {type: integer, format: int64, minimum: 1}
+        type: {type: string}
+        occurredAt: {type: string, format: date-time}
+        coversThrough: {type: integer, format: int64, minimum: 1}
+        data: {type: object, additionalProperties: true}
