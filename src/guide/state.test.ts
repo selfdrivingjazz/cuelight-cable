@@ -28,15 +28,6 @@ describe("Cable runtime state", () => {
     expect(placard.kind === "ready" && placard.selectedId).toBe("channel-2");
   });
 
-  it("swaps a renewed remote descriptor without leaving the current view", () => {
-    const ready = runtimeReducer(initialRuntimeState, { type: "SYNC_REVISION", presentation: presentationFixture });
-    const placard = runtimeReducer(runtimeReducer(ready, { type: "SELECT_CHANNEL", channelId: "channel-2" }), { type: "OPEN_PLACARD" });
-    const remote = { url: "https://control.example/remote/two#token=t", showQr: true, expiresAt: "2026-10-04T00:00:00Z" };
-    const renewed = runtimeReducer(placard, { type: "UPDATE_REMOTE", remote });
-    expect(renewed.kind === "ready" && [renewed.mode, renewed.selectedId, renewed.presentation.remote]).toEqual(["placard", "channel-2", remote]);
-    expect(runtimeReducer(initialRuntimeState, { type: "UPDATE_REMOTE", remote })).toBe(initialRuntimeState);
-  });
-
   it("preserves stale offline state and supports retry", () => {
     const stale = { ...presentationFixture, revision: { ...presentationFixture.revision, stale: true } };
     const state = runtimeReducer(initialRuntimeState, { type: "SYNC_REVISION", presentation: stale });

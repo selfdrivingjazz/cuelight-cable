@@ -1,7 +1,6 @@
 import * as React from "react";
 import QRCode from "qrcode";
-import { AppAuthError, type CuelightApp, type RemoteEvent } from "../cuelightApp";
-import type { RemoteDescriptor } from "../presentation";
+import { AppAuthError, type CuelightApp, type RemoteDescriptor, type RemoteEvent } from "../cuelightApp";
 
 function delay(milliseconds: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();

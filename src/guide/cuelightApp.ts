@@ -1,4 +1,4 @@
-import { PresentationError, type OccurrenceMedia, type PresentationSource, type RemoteDescriptor } from "./presentation";
+import { PresentationError, type OccurrenceMedia, type PresentationSource } from "./presentation";
 
 export class GuideLinkError extends PresentationError {
   constructor(message: string) {
@@ -158,6 +158,13 @@ export interface RemoteEventPage {
   events: RemoteEvent[];
   next: number;
   remote?: RemoteDescriptor;
+}
+
+/** The node's active phone-remote session; the guide renders the QR for `url` when `showQr` is set. */
+export interface RemoteDescriptor {
+  url: string;
+  showQr: boolean;
+  expiresAt: string;
 }
 
 export interface MediaSources {

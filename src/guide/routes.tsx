@@ -1,8 +1,8 @@
 import * as React from "react";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Link, Outlet, useNavigate } from "@tanstack/react-router";
-import { loadPresentation, type Occurrence, type Presentation, type PresentationSource, type RemoteDescriptor } from "./presentation";
+import { loadPresentation, type Occurrence, type Presentation, type PresentationSource } from "./presentation";
 import { initialRuntimeState, runtimeReducer, type RuntimeAction, type RuntimeState } from "./state";
-import { CableServerSource, GuideLinkError, mediaSources, type CuelightApp, type GuideSession, type RemoteEvent } from "./cuelightApp";
+import { CableServerSource, GuideLinkError, mediaSources, type CuelightApp, type GuideSession, type RemoteDescriptor, type RemoteEvent } from "./cuelightApp";
 import { globalRemoteAction } from "./remoteActions";
 import { LegacyGuide } from "./components/LegacyGuide";
 import { SplashScreen } from "./components/SplashScreen";
@@ -17,6 +17,9 @@ interface RuntimeContextValue {
   linkBroken: boolean;
   /** Called when the Cuelight app API rejects the token; the guide falls back to preview mode. */
   appRejected(): void;
+  /** The node's phone-remote session, from Cuelight's remote event polls; independent of the lineup. */
+  remote?: RemoteDescriptor;
+  setRemote(remote: RemoteDescriptor): void;
 }
 
 const RuntimeContext = React.createContext<RuntimeContextValue | null>(null);
@@ -64,6 +67,7 @@ export function RuntimeProvider({ children, session, linkError, source }: Runtim
   const [attempt, setAttempt] = React.useState(0);
   const [linkBroken, setLinkBroken] = React.useState(Boolean(linkError));
   const [appLost, setAppLost] = React.useState(false);
+  const [remote, setRemote] = React.useState<RemoteDescriptor>();
   const dispatch = React.useCallback<React.Dispatch<RuntimeAction>>((action) => {
     if (action.type === "RETRY_REVISION") setAttempt((value) => value + 1);
     reducerDispatch(action);
@@ -104,7 +108,7 @@ export function RuntimeProvider({ children, session, linkError, source }: Runtim
   }, [activeSource, attempt, fail]);
 
   const app = appLost ? undefined : session?.app;
-  return <RuntimeContext.Provider value={{ state, dispatch, app, linkBroken, appRejected }}>{children}</RuntimeContext.Provider>;
+  return <RuntimeContext.Provider value={{ state, dispatch, app, linkBroken, appRejected, remote, setRemote }}>{children}</RuntimeContext.Provider>;
 }
 
 function presentationOf(state: RuntimeState): Presentation | undefined {
@@ -125,7 +129,7 @@ function occurrenceForState(state: RuntimeState): Occurrence | undefined {
 }
 
 function Shell() {
-  const { state, dispatch, app, appRejected } = useRuntime();
+  const { state, dispatch, app, appRejected, setRemote } = useRuntime();
   const navigate = useNavigate();
   const presentation = presentationOf(state);
   const [showSplash, setShowSplash] = React.useState(true);
@@ -159,8 +163,7 @@ function Shell() {
     remoteBus.current.pending.push(event);
     remoteBus.current.drain();
   }, [dispatch, navigate, presentation, state]);
-  const updateRemote = React.useCallback((remote: RemoteDescriptor) => dispatch({ type: "UPDATE_REMOTE", remote }), [dispatch]);
-  useRemoteInput(app, relayRemoteEvent, updateRemote, appRejected);
+  useRemoteInput(app, relayRemoteEvent, setRemote, appRejected);
   useKeyboardRemote(relayRemoteEvent);
   React.useEffect(() => {
     const timer = window.setTimeout(() => setShowSplash(false), 4_700);
@@ -212,7 +215,7 @@ function EmptyState() {
 }
 
 function GuidePage() {
-  const { state, dispatch, app } = useRuntime();
+  const { state, dispatch, app, remote } = useRuntime();
   const navigate = useNavigate();
   const presentation = "presentation" in state ? state.presentation : undefined;
   const selectedId = state.kind === "ready" || state.kind === "stale-offline" ? state.selectedId : null;
@@ -238,10 +241,10 @@ function GuidePage() {
       const channel = channels[(index + 1) % channels.length];
       if (channel) selectChannel(channel.id);
     } else if (event.key === "ChannelUp") {
-      const channel = channels[(index - 1 + channels.length) % channels.length];
+      const channel = channels[(index + 1) % channels.length];
       if (channel) tuneChannel(channel.id);
     } else if (event.key === "ChannelDown") {
-      const channel = channels[(index + 1) % channels.length];
+      const channel = channels[(index - 1 + channels.length) % channels.length];
       if (channel) tuneChannel(channel.id);
     } else if (event.key === "Enter") {
       const channel = channels[index];
@@ -264,8 +267,8 @@ function GuidePage() {
     offline={state.kind === "stale-offline" || presentation.revision.stale}
     preview={!app}
     mediaSources={(media) => mediaSources(app, media)}
-    remoteURL={presentation.remote?.url}
-    showQR={presentation.remote?.showQr}
+    remoteURL={remote?.url}
+    showQR={remote?.showQr}
     onSelectChannel={(channel) => selectChannel(channel.id)}
     onTune={(occurrence) => {
       dispatch({ type: "TUNE_LIVE", occurrence });
@@ -343,8 +346,8 @@ function PlayerSurface({ occurrence, onReady, onFailure, onBack, onChannel }: { 
     else if (event.key === "VolumeUp") { setMuted(false); setVolume((value) => Math.min(100, value + 5)); }
     else if (event.key === "VolumeDown") { setMuted(false); setVolume((value) => Math.max(0, value - 5)); }
     else if (event.key === "Mute") setMuted((value) => !value);
-    else if (event.key === "ChannelUp") onChannel(-1);
-    else if (event.key === "ChannelDown") onChannel(1);
+    else if (event.key === "ChannelUp") onChannel(1);
+    else if (event.key === "ChannelDown") onChannel(-1);
     else if (event.key === "Enter" && video.current) {
       if (video.current.paused) void video.current.play();
       else video.current.pause();

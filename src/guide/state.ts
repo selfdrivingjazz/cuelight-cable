@@ -19,7 +19,6 @@ export type RuntimeAction =
   | { type: "RETRY_REVISION" }
   | { type: "SYNC_REVISION"; presentation: Presentation }
   | { type: "REFRESH_REVISION"; presentation: Presentation }
-  | { type: "UPDATE_REMOTE"; remote: NonNullable<Presentation["remote"]> }
   | { type: "SELECT_CHANNEL"; channelId: string }
   | { type: "SELECT_PROGRAM"; occurrence: Occurrence }
   | { type: "TUNE_LIVE"; occurrence: Occurrence }
@@ -58,10 +57,6 @@ export function runtimeReducer(state: RuntimeState, action: RuntimeAction): Runt
       }
       return { ...state, presentation: action.presentation };
     }
-    case "UPDATE_REMOTE":
-      // The node renewed its remote session; keep the current view.
-      if (!("presentation" in state)) return state;
-      return { ...state, presentation: { ...state.presentation, remote: action.remote } };
     case "SELECT_CHANNEL":
       if (state.kind !== "ready" && state.kind !== "stale-offline") return state;
       return { ...state, selectedId: action.channelId };

@@ -24,7 +24,8 @@ export function globalRemoteAction(presentation: Presentation, state: RuntimeSta
     const selected = state.kind === "ready" || state.kind === "stale-offline" ? state.selectedId : null;
     const currentId = playing ?? selected ?? presentation.occurrences[0]?.channelId ?? channels[0]?.id;
     const index = Math.max(0, channels.findIndex((channel) => channel.id === currentId));
-    target = channels[(index + (key === "ChannelUp" ? -1 : 1) + channels.length) % channels.length];
+    // Like a TV: Channel Up tunes the next higher channel number, wrapping around.
+    target = channels[(index + (key === "ChannelUp" ? 1 : -1) + channels.length) % channels.length];
   }
   if (!target) return undefined;
   const occurrence = liveOccurrence(presentation, target.id, now);
