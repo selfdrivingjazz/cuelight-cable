@@ -168,15 +168,21 @@ export interface RemoteDescriptor {
 }
 
 export interface MediaSources {
-  /** Playable bytes; absent in preview mode (no app token). */
+  /** What the player loads: file bytes (absent in preview mode, without an app token) or a web page URL. */
   src?: string;
   poster: string;
 }
 
-/** Where the guide loads a programme's media from: Cuelight with an app token, else the Cable thumbnail proxy. */
+/**
+ * Where the guide loads a programme's media from: files from Cuelight with an
+ * app token, web pages from their own URL; thumbnails from Cuelight, or the
+ * Cable thumbnail proxy in preview mode.
+ */
 export function mediaSources(app: CuelightApp | undefined, media: OccurrenceMedia): MediaSources {
-  if (app && !app.error) return { src: app.mediaUrl(media.mediaId, "content"), poster: app.mediaUrl(media.mediaId, "thumbnail") };
-  return { poster: `/api/media/${encodeURIComponent(media.mediaId)}/thumbnail` };
+  const live = app && !app.error ? app : undefined;
+  const poster = live ? live.mediaUrl(media.mediaId, "thumbnail") : `/api/media/${encodeURIComponent(media.mediaId)}/thumbnail`;
+  if (media.kind === "web") return { src: media.url, poster };
+  return live ? { src: live.mediaUrl(media.mediaId, "content"), poster } : { poster };
 }
 
 /** Reads the live presentation the Cable server computes for a deployment. */

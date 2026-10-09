@@ -28,10 +28,14 @@ export interface PresentationBlock {
   source: "playlist" | "media";
 }
 
-/** Playable Cuelight media; the guide fetches it from `{api}/app/media/{mediaId}/content`. */
+/**
+ * Playable Cuelight media. The guide fetches files from
+ * `{api}/app/media/{mediaId}/content` and frames web pages at `url`.
+ */
 export type PresentationMedia =
   | { kind: "video"; mediaId: string; mime: "video/mp4" }
-  | { kind: "image"; mediaId: string; mime: "image/jpeg" | "image/png" | "image/webp" };
+  | { kind: "image"; mediaId: string; mime: "image/jpeg" | "image/png" | "image/webp" }
+  | { kind: "web"; mediaId: string; url: string };
 
 export interface PresentationProgram {
   id: string;
@@ -71,7 +75,8 @@ function orElse<T>(normalize: () => T, fallback: T): T {
 }
 
 /** Maps a Cuelight media item to a guide-playable descriptor; undefined when the guide cannot play it. */
-export function playableMedia(media: { id: string; kind: string; artifact?: { mediaType: string; state?: string } }): PresentationMedia | undefined {
+export function playableMedia(media: { id: string; kind: string; url?: string; artifact?: { mediaType: string; state?: string } }): PresentationMedia | undefined {
+  if (media.kind === "web") return media.url && /^https?:\/\//i.test(media.url) ? { kind: "web", mediaId: media.id, url: media.url } : undefined;
   if (media.kind !== "file" || !media.artifact) return undefined;
   if (media.artifact.state !== undefined && media.artifact.state !== "ready") return undefined;
   const mime = media.artifact.mediaType.trim().toLowerCase();
@@ -153,15 +158,22 @@ async function blockPrograms(catalog: CuelightCatalog, resolveMedia: (mediaId: s
   if (!block.playlistId) return [];
   const playlist = await catalog.playlist(block.playlistId);
   if (!playlist) return [];
-  // Only file items rotate through a block; web pages cannot play in the guide.
+  // Items rotate in position order, each for its Cuelight duration (file or
+  // web alike); an item the guide cannot play keeps its slot but is omitted.
   const items = playlist.items
-    .filter((item) => item.assetId && item.mediaId && item.durationSeconds > 0)
+    .filter((item) => item.mediaId && item.durationSeconds > 0)
     .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id));
   if (items.length === 0) return [];
 
   const out: PresentationProgram[] = [];
   let cursor = blockStart;
-  for (let occurrence = 1; cursor < blockEnd && cursor < windowEnd; occurrence++) {
+  let occurrence = 1;
+  // Long blocks (months) skip whole rotations that ended before the window.
+  const cycleMs = items.reduce((total, item) => total + item.durationSeconds * 1000, 0);
+  const skippedCycles = Math.max(0, Math.floor((windowStart - blockStart) / cycleMs));
+  cursor += skippedCycles * cycleMs;
+  occurrence += skippedCycles * items.length;
+  for (; cursor < blockEnd && cursor < windowEnd; occurrence++) {
     const item = items[(occurrence - 1) % items.length]!;
     const itemEnd = Math.min(cursor + item.durationSeconds * 1000, blockEnd);
     if (itemEnd > windowStart) {

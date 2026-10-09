@@ -79,6 +79,19 @@ describe("media sources", () => {
     app.reject();
     expect(mediaSources(app, media).src).toBeUndefined();
   });
+
+  it("frames web pages at their own URL with or without an app token", () => {
+    const web = { kind: "web" as const, mediaId: "turf", url: "https://turf.example:8465/?seed=3" };
+    expect(mediaSources(undefined, web)).toEqual({ src: web.url, poster: "/api/media/turf/thumbnail" });
+    expect(mediaSources(new CuelightApp("tok", "https://cue.example/api/v1"), web)).toEqual({ src: web.url, poster: "https://cue.example/api/v1/app/media/turf/thumbnail?access_token=tok" });
+  });
+
+  it("rejects web media that is not an http(s) page", async () => {
+    const occurrence = presentationFixture.occurrences[0]!;
+    const withMedia = (url: string) => ({ ...presentationFixture, occurrences: [{ ...occurrence, media: { kind: "web", mediaId: "page", url } }] });
+    await expect(loadPresentation({ read: async () => withMedia("https://turf.example/") })).resolves.toBeDefined();
+    await expect(loadPresentation({ read: async () => withMedia("javascript:alert(1)") })).rejects.toThrow("invalid presentation");
+  });
 });
 
 describe("Cable server presentation source", () => {

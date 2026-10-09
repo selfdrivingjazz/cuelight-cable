@@ -354,16 +354,52 @@ function PlayerSurface({ occurrence, onReady, onFailure, onBack, onChannel }: { 
     }
   }, [onBack, onChannel]);
   useRemoteEvents(handleRemote);
-  // Preview mode (no Cuelight app token) can only show the programme's poster.
-  const media = !sources.src
-    ? <img className="player-content-media" src={sources.poster} alt={occurrence.title} onLoad={onReady} onError={onFailure} />
-    : occurrence.media.kind === "video"
-      ? <video ref={video} className="player-content-media" src={sources.src} poster={sources.poster} autoPlay playsInline loop={occurrence.loop ?? false} muted={muted} onCanPlay={onReady} onError={onFailure} />
-      : <img className="player-content-media" src={sources.src} alt={occurrence.title} onLoad={onReady} onError={onFailure} />;
+  // Preview mode (no Cuelight app token) can only show a file programme's poster.
+  const media = occurrence.media.kind === "web"
+    ? <WebProgram url={occurrence.media.url} title={occurrence.title} onReady={onReady} />
+    : !sources.src
+      ? <img className="player-content-media" src={sources.poster} alt={occurrence.title} onLoad={onReady} onError={onFailure} />
+      : occurrence.media.kind === "video"
+        ? <video ref={video} className="player-content-media" src={sources.src} poster={sources.poster} autoPlay playsInline loop={occurrence.loop ?? false} muted={muted} onCanPlay={onReady} onError={onFailure} />
+        : <img className="player-content-media" src={sources.src} alt={occurrence.title} onLoad={onReady} onError={onFailure} />;
   return <section className="player-surface" aria-label="Cable player">
     <div className="player-viewport" data-fit={occurrence.fit ?? "fit"}>{media}</div>
     {!sources.src && <p className="player-preview-note">Preview — assign this guide to a Cuelight screen to play programmes.</p>}
   </section>;
+}
+
+/**
+ * A web programme framed full-bleed.
+ *
+ * The sandbox keeps what typical pages need (scripts, their own origin's
+ * storage and cookies, forms, pointer lock) and withholds top-level
+ * navigation, popups and modal dialogs: a page must not be able to navigate
+ * the guide away or block a screen with a dialog nobody can dismiss.
+ *
+ * A focused cross-origin frame swallows keystrokes (the keyboard remote), so
+ * whenever the page takes focus the guide takes it back. Cuelight remote
+ * events arrive by long poll and do not depend on focus.
+ */
+function WebProgram({ url, title, onReady }: { url: string; title: string; onReady?: () => void }) {
+  const frame = React.useRef<HTMLIFrameElement>(null);
+  React.useEffect(() => {
+    let timer: number | undefined;
+    const reclaim = () => {
+      window.clearTimeout(timer);
+      // The frame is the parent's activeElement only once focus has moved into it.
+      timer = window.setTimeout(() => {
+        if (!frame.current || document.activeElement !== frame.current) return;
+        frame.current.blur();
+        window.focus();
+      }, 0);
+    };
+    window.addEventListener("blur", reclaim);
+    return () => {
+      window.removeEventListener("blur", reclaim);
+      window.clearTimeout(timer);
+    };
+  }, []);
+  return <iframe ref={frame} className="player-content-media player-web" src={url} title={title} tabIndex={-1} allow="autoplay; fullscreen" sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock" onLoad={onReady} />;
 }
 
 function PlacardPage() {

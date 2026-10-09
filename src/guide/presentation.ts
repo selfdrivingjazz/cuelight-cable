@@ -1,9 +1,14 @@
 import { z } from "zod";
 
 // Mirrors the server's Presentation (src/server/presentation.ts). Media carry
-// Cuelight media ids; the guide resolves them against the Cuelight app API
-// (or the Cable server's thumbnail proxy in preview mode).
-const mediaSchema = z.discriminatedUnion("kind", [z.object({ kind: z.literal("video"), mediaId: z.string().min(1), mime: z.literal("video/mp4") }), z.object({ kind: z.literal("image"), mediaId: z.string().min(1), mime: z.enum(["image/jpeg", "image/png", "image/webp"]) })]);
+// Cuelight media ids; the guide resolves files against the Cuelight app API
+// (or the Cable server's thumbnail proxy in preview mode) and frames web
+// pages at their URL.
+const mediaSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("video"), mediaId: z.string().min(1), mime: z.literal("video/mp4") }),
+  z.object({ kind: z.literal("image"), mediaId: z.string().min(1), mime: z.enum(["image/jpeg", "image/png", "image/webp"]) }),
+  z.object({ kind: z.literal("web"), mediaId: z.string().min(1), url: z.url({ protocol: /^https?$/ }) }),
+]);
 const occurrenceSchema = z.object({ id: z.string(), blockId: z.string().optional(), itemId: z.string().optional(), itemPosition: z.number().int().positive().optional(), occurrence: z.number().int().positive().optional(), channelId: z.string(), startsAt: z.string().datetime(), endsAt: z.string().datetime(), title: z.string(), subtitle: z.string().optional(), media: mediaSchema, placard: z.enum(["always", "start", "never"]), fit: z.enum(["fit", "fill"]).optional(), loop: z.boolean().optional(), muted: z.boolean().optional(), volume: z.number().min(0).max(100).optional() });
 const blockSchema = z.object({ id: z.string(), channelId: z.string(), startsAt: z.string().datetime(), endsAt: z.string().datetime(), title: z.string(), source: z.enum(["playlist", "media"]) });
 const channelSchema = z.object({ id: z.string(), number: z.number().int().positive(), name: z.string(), callsign: z.string(), accent: z.string(), enabled: z.boolean(), standbyMessage: z.string().optional() });

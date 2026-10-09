@@ -57,10 +57,11 @@ media item).
 
 - **Deployments**: name, timezone, theme (nebula, gallery, noir), guide slot size and horizon.
 - **Channels**: number (unique per deployment), name, callsign, accent colour, enabled/standby.
-- **Blocks**: a time window on a channel showing exactly one Cuelight **playlist** (its file
-  items rotate in order for their durations; web items are skipped) or one Cuelight **media**
-  item for the whole block. Blocks on a channel cannot overlap. Only `video/mp4`, JPEG, PNG and
-  WebP media play in the guide; anything else is left off the schedule.
+- **Blocks**: a time window on a channel showing exactly one Cuelight **playlist** (its items
+  rotate in position order, each for its Cuelight `durationSeconds`) or one Cuelight **media**
+  item for the whole block. Blocks on a channel cannot overlap; there is no maximum length (a
+  block may span a year). `video/mp4`, JPEG, PNG and WebP files and **web** pages (http/https)
+  play in the guide; anything else is left off the schedule (in a playlist it keeps its slot).
 - **Programs**: standalone programme entries with metadata, kept for authoring (the guide plays
   blocks).
 
@@ -88,6 +89,56 @@ Opened without a token (e.g. the **Preview** link in the editor), the guide rend
 in preview mode with thumbnails proxied by the Cable server. The keyboard stands in for the
 remote: arrows, Enter, Escape/Backspace, PageUp/PageDown for channel up/down, digits for a
 channel number, `G` for the guide, `M` and `+`/`-` for audio.
+
+Web programmes play in a full-bleed `<iframe>` at the media item's URL, in preview mode too.
+The frame may autoplay and go fullscreen; it is sandboxed to scripts, its own origin's storage,
+forms and pointer lock (no top-level navigation, popups or dialogs), and if the page takes
+keyboard focus the guide takes it back so the remote keeps working.
+
+## Scripted setup
+
+Everything the editor does is plain JSON over HTTP (no auth). Times are RFC 3339; updates are
+full replacements (`PATCH` takes the same body as `POST`) and need `If-Match` with the `ETag`
+from the last read (`"v1"`, …); deletes need it too. Errors are `{"error", "field"?}` with 400
+(validation), 404, 409 (overlap or stale `If-Match`) or 502 (Cuelight).
+
+```sh
+CABLE=http://127.0.0.1:4190
+
+# Cuelight library, as the server's token sees it (kind=file|web, search=…, cursor=…)
+curl -s "$CABLE/api/cuelight/media?kind=web" | jq '.items[] | {id, title, url}'
+curl -s "$CABLE/api/cuelight/playlists" | jq '.items[] | {id, name, items: [.items[] | {mediaId, durationSeconds}]}'
+
+# Deployment: name and timezone required; theme nebula|gallery|noir, guideDensity
+# quarter-hour|half-hour|hour, guideHorizonSeconds 3600..2678400 (default 86400)
+DEP=$(curl -s -X POST $CABLE/api/deployments -H 'Content-Type: application/json' \
+  -d '{"name":"Turf TV","timezone":"America/Los_Angeles","theme":"nebula"}' | jq -r .id)
+
+# Channel: number (unique per deployment) and name required; callsign, description,
+# accent (CSS colour), enabled (default true), standby (default false)
+CH=$(curl -s -X POST $CABLE/api/deployments/$DEP/channels -H 'Content-Type: application/json' \
+  -d '{"number":3,"name":"Turf","callsign":"TURF","accent":"#5eead4"}' | jq -r .id)
+
+# Block: exactly one of mediaId or playlistId, title, startsAt < endsAt; a year-long web block
+curl -s -X POST $CABLE/api/channels/$CH/blocks -H 'Content-Type: application/json' \
+  -d '{"mediaId":"<web media id>","title":"Turf · tide duel","startsAt":"2026-10-09T19:00:00Z","endsAt":"2027-10-09T19:00:00Z"}'
+
+# Change it later (If-Match from the block's ETag)
+curl -s -X PATCH $CABLE/api/blocks/<block id> -H 'Content-Type: application/json' -H 'If-Match: "v1"' \
+  -d '{"playlistId":"<playlist id>","title":"Turf mix","startsAt":"2026-10-09T19:00:00Z","endsAt":"2027-10-09T19:00:00Z"}'
+
+# What screens will show, and the guide URL
+curl -s $CABLE/api/deployments/$DEP/presentation | jq '.occurrences[] | {title, startsAt, endsAt, media}'
+curl -s $CABLE/api/deployments/$DEP | jq -r .guideUrl
+
+# Put the guide in Cuelight as an app-access web item (needs media_write; otherwise 403 with
+# the guideUrl to add by hand, e.g. with the cuelight CLI)
+curl -s -X POST $CABLE/api/deployments/$DEP/cuelight-media | jq '{media: .media.id, guideUrl: .deployment.guideUrl}'
+```
+
+Lists: `GET /api/deployments`, `/api/deployments/{id}/channels`, `/api/channels/{id}/blocks`;
+single items at `/api/deployments/{id}`, `/api/channels/{id}`, `/api/blocks/{id}` (`GET`,
+`PATCH`, `DELETE`). Deleting a deployment or channel deletes what it contains.
 
 ## Importing pre-split Cable data
 

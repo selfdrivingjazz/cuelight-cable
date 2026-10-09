@@ -252,14 +252,14 @@ function ChannelPage({ id }: { id: string }) {
 
 function MediaPicker({ value, onChange }: { value: string; onChange: (mediaId: string, media?: CuelightMedia) => void }) {
   const [search, setSearch] = React.useState("");
-  const results = useLoad(() => api<{ items: CuelightMedia[] }>("GET", `/api/cuelight/media?kind=file&search=${encodeURIComponent(search)}`), [search]);
+  const results = useLoad(() => api<{ items: CuelightMedia[] }>("GET", `/api/cuelight/media?search=${encodeURIComponent(search)}`), [search]);
   return <div className="picker">
     <input type="search" placeholder="Search Cuelight media" value={search} onChange={(event) => setSearch(event.currentTarget.value)} />
     {!results.data ? <Loading error={results.error} /> : <ul className="media-grid">{results.data.items.map((media) => <li key={media.id}>
       <button type="button" className={media.id === value ? "tile selected" : "tile"} onClick={() => onChange(media.id, media)}>
         <img src={thumbnailUrl(media.id)} alt="" loading="lazy" onError={(event) => { event.currentTarget.style.visibility = "hidden"; }} />
         <span>{media.title}</span>
-        <small>{media.artifact?.mediaType ?? media.kind}</small>
+        <small>{media.kind === "web" ? "web page" : media.artifact?.mediaType ?? media.kind}</small>
       </button>
     </li>)}</ul>}
   </div>;

@@ -46,7 +46,7 @@ describe("buildPresentation", () => {
     expect(first.channels.map((channel) => [channel.id, channel.standbyMessage])).toEqual([[one.id, "Standby"], [two.id, undefined]]);
     // Blocks outside the window are dropped; a block whose playlist vanished stays on the grid with nothing to play.
     expect(first.blocks.map((block) => [block.title, block.source])).toEqual([["Loop", "playlist"], ["Gone", "playlist"]]);
-    // The 30-minute block plays clip then still then (unplayable) audio; the web item does not rotate.
+    // The 30-minute block plays clip, still, then the web item, which is not in the library (left out); audio never comes up.
     expect(first.occurrences).toHaveLength(2);
     const [clip, still] = first.occurrences;
     expect(clip).toMatchObject({ id: `${loop.id}:1`, blockId: loop.id, itemId: "a", itemPosition: 1, title: "Clip", subtitle: "Sub", media: { kind: "video", mediaId: "clip", mime: "video/mp4" }, startsAt: at(-10), endsAt: at(0) });
@@ -73,5 +73,40 @@ describe("buildPresentation", () => {
     const presentation = await buildPresentation(store, source, deployment.id, now);
     expect(presentation.occurrences).toEqual([expect.objectContaining({ id: block.id, blockId: block.id, title: "Feature", startsAt: "2026-10-04T11:30:00.000Z", endsAt: "2026-10-04T13:00:00.000Z", media: { kind: "video", mediaId: "clip", mime: "video/mp4" } })]);
     expect(presentation.blocks.map((item) => item.source)).toEqual(["media", "media"]);
+  });
+
+  it("plays web media for a whole direct block and for its duration inside a playlist", async () => {
+    const now = new Date("2026-10-04T12:00:00Z");
+    const day = 24 * 60 * minute;
+    const at = (offsetMinutes: number) => new Date(now.getTime() + offsetMinutes * minute).toISOString();
+    const store = new Store(":memory:");
+    const deployment = store.createDeployment({ name: "Dep", timezone: "UTC", theme: "noir", guideDensity: "half-hour", guideHorizonSeconds: 3600, placardDefaults: {}, fallbackMetadata: {} });
+    const direct = store.createChannel(deployment.id, { number: 1, name: "Turf", callsign: "", description: "", accent: "", enabled: true, standby: false });
+    const rotating = store.createChannel(deployment.id, { number: 2, name: "Mix", callsign: "", description: "", accent: "", enabled: true, standby: false });
+    // Year-long blocks that started 30 days ago.
+    const blockStart = at(-30 * day / minute);
+    const blockEnd = new Date(now.getTime() + 335 * day).toISOString();
+    const feature = store.createBlock(direct.id, { mediaId: "turf", title: "Turf all year", startsAt: blockStart, endsAt: blockEnd });
+    const mix = store.createBlock(rotating.id, { playlistId: "mix", title: "Mix", startsAt: blockStart, endsAt: blockEnd });
+    const turf = { kind: "web", mediaId: "turf", url: "https://turf.example:8465/?seed=3" };
+    const source = catalog([{ id: "turf", kind: "web", url: turf.url, title: "turf", tags: [], appAccess: false, version: 1, createdBy: "a", updatedBy: "a", createdAt: "", updatedAt: "" }, fileMedia("clip", "video/mp4")], [{ id: "mix", name: "mix", description: "", version: 1, createdBy: "a", createdAt: "", updatedAt: "", items: [
+      { id: "page", playlistId: "mix", mediaId: "turf", position: 1, durationSeconds: 300, title: "Turf", subtitle: "" },
+      { id: "film", playlistId: "mix", mediaId: "clip", assetId: "clip", position: 2, durationSeconds: 600, title: "Clip", subtitle: "" },
+    ] }]);
+
+    const presentation = await buildPresentation(store, source, deployment.id, now);
+    const onDirect = presentation.occurrences.filter((occurrence) => occurrence.channelId === direct.id);
+    expect(onDirect).toEqual([expect.objectContaining({ id: feature.id, title: "Turf all year", startsAt: new Date(blockStart).toISOString(), endsAt: blockEnd, media: turf })]);
+
+    // 15-minute rotations since the block started: 2880 of them by now. The
+    // window (now-1h to now+1h) holds 8 rotations, numbered from block start.
+    const onMix = presentation.occurrences.filter((occurrence) => occurrence.channelId === rotating.id);
+    expect(onMix).toHaveLength(16);
+    expect(onMix.slice(0, 3)).toEqual([
+      expect.objectContaining({ id: `${mix.id}:5753`, occurrence: 5753, itemId: "page", title: "Turf", media: turf, startsAt: at(-60), endsAt: at(-55) }),
+      expect.objectContaining({ id: `${mix.id}:5754`, itemId: "film", media: { kind: "video", mediaId: "clip", mime: "video/mp4" }, startsAt: at(-55), endsAt: at(-45) }),
+      expect.objectContaining({ id: `${mix.id}:5755`, itemId: "page", startsAt: at(-45), endsAt: at(-40) }),
+    ]);
+    expect(onMix.at(-1)).toMatchObject({ id: `${mix.id}:5768`, itemId: "film", startsAt: at(50), endsAt: at(60) });
   });
 });

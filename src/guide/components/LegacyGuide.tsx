@@ -44,7 +44,7 @@ export function LegacyGuide({ presentation, selectedChannelId, offline, preview,
     <header className="guide-header">
       <div className="header-card">
         <div className="poster">
-          <div className="poster-preview">{selected && sources ? (selected.media.kind === "video" && sources.src ? <video key={selected.id} className="poster-preview-media" src={sources.src} poster={sources.poster} autoPlay muted loop playsInline /> : <img key={selected.id} className="poster-preview-media" src={sources.src ?? sources.poster} alt="" />) : null}</div>
+          <div className="poster-preview">{selected && sources ? (selected.media.kind === "video" && sources.src ? <video key={selected.id} className="poster-preview-media" src={sources.src} poster={sources.poster} autoPlay muted loop playsInline /> : <img key={selected.id} className="poster-preview-media" src={selected.media.kind === "image" ? sources.src ?? sources.poster : sources.poster} alt="" onError={(event) => { event.currentTarget.style.visibility = "hidden"; }} />) : null}</div>
           {!selected && <div className="poster-glow" />}
           {!selected && <div className="poster-label">{selectedChannel?.callsign ?? "CABLE"}</div>}
         </div>
