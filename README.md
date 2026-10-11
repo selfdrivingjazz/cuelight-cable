@@ -45,7 +45,7 @@ media item).
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CUELIGHT_URL` | required | Cuelight origin, e.g. `https://cuelight.example.ts.net:8454`. |
+| `CUELIGHT_URL` | required | Cuelight origin, e.g. `https://cuelight.example.ts.net:8443`. |
 | `CUELIGHT_TOKEN` | required | Cuelight operator token (`media_read`, optionally `media_write`). |
 | `CUELIGHT_CA_FILE` | none | Extra CA certificate(s), PEM, trusted when calling Cuelight (self-signed control planes). |
 | `CABLE_DB_PATH` | `data/cable.db` | SQLite database (created and migrated on start). |
