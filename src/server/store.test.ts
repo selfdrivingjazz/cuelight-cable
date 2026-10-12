@@ -53,7 +53,7 @@ describe("input validation", () => {
 
   it("normalizes deployment settings", () => {
     expect(parseDeploymentInput({ name: " Dep ", timezone: "utc", theme: "Gallery" })).toMatchObject({ name: "Dep", timezone: "UTC", theme: "gallery", guideDensity: "half-hour", guideHorizonSeconds: 86400 });
-    expect(() => parseDeploymentInput({ name: "Dep", timezone: "Mars/Olympus" })).toThrow(/IANA/);
+    expect(() => parseDeploymentInput({ name: "Dep", timezone: "Nowhere/Invalid" })).toThrow(/IANA/);
     expect(() => parseDeploymentInput({ name: "Dep", timezone: "UTC", guideHorizonSeconds: 60 })).toThrow(/between one hour/);
   });
 });
