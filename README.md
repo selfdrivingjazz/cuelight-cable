@@ -9,7 +9,7 @@ Cable owns only its schedule (SQLite). Media and playlists live in Cuelight: blo
 Cuelight playlist and media ids, the Cable server reads their metadata through the Cuelight
 operator API, and the guide plays media straight from Cuelight with the screen's app token.
 
-Demo-ware built for the Mars College LAN: the Cable server has no login of its own. Keep it on a
+Demo-ware: the Cable server has no login of its own. Keep it on a
 trusted network.
 
 ```mermaid
